@@ -303,6 +303,42 @@ func (a *MainAgent) RAGQuery(ctx context.Context, query, context string) (string
 	return response.Content, nil
 }
 
+// SetToolRegistry sets the tool registry for the main agent
+func (a *MainAgent) SetToolRegistry(registry ToolRegistry) {
+	a.BaseAgent.tools = registry
+}
+
+// SetSubagentTools sets the tool registry for a specific subagent
+func (a *MainAgent) SetSubagentTools(agentType AgentType, registry ToolRegistry) error {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	subagent, exists := a.subagents[agentType]
+	if !exists {
+		return fmt.Errorf("subagent %s not found", agentType)
+	}
+
+	// Use type assertion to access SetTools method
+	if baseAgent, ok := subagent.(interface{ SetTools(ToolRegistry) }); ok {
+		baseAgent.SetTools(registry)
+		return nil
+	}
+
+	return fmt.Errorf("subagent %s does not support SetTools", agentType)
+}
+
+// SetAllSubagentTools sets the tool registry for all registered subagents
+func (a *MainAgent) SetAllSubagentTools(registry ToolRegistry) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, subagent := range a.subagents {
+		if baseAgent, ok := subagent.(interface{ SetTools(ToolRegistry) }); ok {
+			baseAgent.SetTools(registry)
+		}
+	}
+}
+
 // Stop stops the main agent and all subagents
 func (a *MainAgent) Stop() error {
 	a.mu.Lock()
@@ -314,7 +350,8 @@ func (a *MainAgent) Stop() error {
 		}
 	}
 
-	a.SetState(StateIdle)
+	// Directly set state without calling SetState to avoid deadlock
+	a.BaseAgent.state = StateIdle
 	return nil
 }
 
@@ -409,10 +446,5 @@ func isGuideRequest(goal string) bool {
 }
 
 func containsString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
+	return strings.Contains(s, substr)
 }
