@@ -6,9 +6,9 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Globe, ArrowRight, Check, Loader2, AlertCircle } from "lucide-react";
-import { useAgents } from "@/hooks/useAgents";
-import { Agent } from "@/lib/api/client";
+import { Globe, ArrowRight, Check, Loader2, AlertCircle, Sparkles } from "lucide-react";
+import { ExecutionProgress } from "@/components/destination/execution-progress";
+import { useAgentCreation } from "@/hooks/useAgentCreation";
 
 const themes = [
   { id: "cultural", label: "文化之旅", icon: "🏛️", description: "历史遗迹、博物馆、传统文化" },
@@ -25,50 +25,43 @@ const languages = [
 
 export default function CreateDestinationPage() {
   const router = useRouter();
-  const { createAgent } = useAgents();
-  const [step, setStep] = useState(1);
+  const {
+    status,
+    steps,
+    progress,
+    error,
+    agentId,
+    create,
+    reset,
+  } = useAgentCreation();
+
   const [destination, setDestination] = useState("");
   const [selectedTheme, setSelectedTheme] = useState("cultural");
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>(["zh"]);
-  const [isCreating, setIsCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
-  const [progress, setProgress] = useState(0);
-  const [currentTask, setCurrentTask] = useState("");
 
   const handleCreate = async () => {
-    setIsCreating(true);
-    setError(null);
-    setStep(2);
-
     try {
-      // Create agent via API
-      const result = await createAgent({
+      await create({
         destination,
         theme: selectedTheme,
         languages: selectedLanguages,
       });
-
-      setCreatedAgent({
-        id: result.agent_id,
-        destination: result.destination,
-        status: result.status,
-        document_count: 0,
-      } as Agent);
-
-      // Simulate progress
-      setProgress(50);
-      setCurrentTask("创建完成！");
-
-      setTimeout(() => {
-        setProgress(100);
-        setStep(3);
-      }, 1000);
-
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "创建失败");
-      setIsCreating(false);
+    } catch {
+      // Error is handled by the hook
     }
+  };
+
+  const handleViewAgent = () => {
+    if (agentId) {
+      router.push(`/guide/${agentId}`);
+    }
+  };
+
+  const handleCreateAnother = () => {
+    reset();
+    setDestination("");
+    setSelectedTheme("cultural");
+    setSelectedLanguages(["zh"]);
   };
 
   const toggleLanguage = (code: string) => {
@@ -90,7 +83,8 @@ export default function CreateDestinationPage() {
       </header>
 
       <main className="container py-8 max-w-2xl">
-        {step === 1 && (
+        {/* Step 1: Form */}
+        {status === 'idle' && (
           <div className="space-y-8">
             <div>
               <h1 className="text-3xl font-bold">创建你的专属导游 Agent</h1>
@@ -156,76 +150,41 @@ export default function CreateDestinationPage() {
               </div>
             </div>
 
-            {/* Error */}
-            {error && (
-              <div className="flex items-center gap-2 text-destructive">
-                <AlertCircle className="h-4 w-4" />
-                <span>{error}</span>
-              </div>
-            )}
-
             {/* Submit */}
             <Button
               size="lg"
               className="w-full"
-              disabled={!destination.trim() || selectedLanguages.length === 0 || isCreating}
+              disabled={!destination.trim() || selectedLanguages.length === 0}
               onClick={handleCreate}
             >
-              {isCreating ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  创建中...
-                </>
-              ) : (
-                <>
-                  开始创建
-                  <ArrowRight className="ml-2 h-4 w-4" />
-                </>
-              )}
+              开始创建
+              <ArrowRight className="ml-2 h-4 w-4" />
             </Button>
           </div>
         )}
 
-        {step === 2 && (
+        {/* Step 2: Creation Progress */}
+        {status === 'creating' && (
           <div className="space-y-8">
             <div className="text-center">
               <div className="h-16 w-16 rounded-full bg-primary/10 flex items-center justify-center mx-auto mb-4">
-                {progress < 100 ? (
-                  <Loader2 className="h-8 w-8 text-primary animate-spin" />
-                ) : (
-                  <Check className="h-8 w-8 text-primary" />
-                )}
+                <Loader2 className="h-8 w-8 text-primary animate-spin" />
               </div>
-              <h1 className="text-2xl font-bold">
-                {progress < 100 ? "正在创建中..." : "创建完成！"}
-              </h1>
+              <h1 className="text-2xl font-bold">正在创建中...</h1>
               <p className="text-muted-foreground mt-2">
-                为你构建 {destination} 导游 Agent
+                为你构建 <span className="font-medium text-foreground">{destination}</span> 导游 Agent
               </p>
-              {createdAgent && (
-                <p className="text-sm text-muted-foreground mt-1">
-                  文档: {createdAgent.document_count} | 分块: {createdAgent.chunk_count}
-                </p>
-              )}
             </div>
 
-            {/* Progress Bar */}
-            <div className="space-y-2">
-              <div className="h-2 bg-muted rounded-full overflow-hidden">
-                <div
-                  className="h-full bg-primary transition-all duration-500"
-                  style={{ width: `${progress}%` }}
+            {/* Execution Progress */}
+            <Card>
+              <CardContent className="p-6">
+                <ExecutionProgress
+                  steps={steps}
+                  progress={progress}
                 />
-              </div>
-              <p className="text-sm text-center text-muted-foreground">{progress}%</p>
-            </div>
-
-            {/* Current Task */}
-            {currentTask && (
-              <div className="text-center text-muted-foreground">
-                {currentTask}
-              </div>
-            )}
+              </CardContent>
+            </Card>
 
             {/* Error */}
             {error && (
@@ -234,15 +193,90 @@ export default function CreateDestinationPage() {
                   <AlertCircle className="h-4 w-4" />
                   <span>{error}</span>
                 </div>
-                <Button variant="outline" onClick={() => {
-                  setStep(1);
-                  setError(null);
-                  setIsCreating(false);
-                }}>
+                <Button variant="outline" onClick={reset}>
                   重试
                 </Button>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Step 3: Completion */}
+        {status === 'completed' && (
+          <div className="space-y-8">
+            <div className="text-center">
+              <div className="h-20 w-20 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center mx-auto mb-4">
+                <Check className="h-10 w-10 text-green-600 dark:text-green-400" />
+              </div>
+              <h1 className="text-2xl font-bold text-green-700 dark:text-green-400">创建完成！</h1>
+              <p className="text-muted-foreground mt-2">
+                <span className="font-medium text-foreground">{destination}</span> 导游 Agent 已准备就绪
+              </p>
+            </div>
+
+            {/* Summary Card */}
+            <Card className="bg-gradient-to-br from-primary/5 to-primary/10 border-primary/20">
+              <CardContent className="p-6">
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="h-12 w-12 rounded-lg bg-primary/20 flex items-center justify-center">
+                    <Sparkles className="h-6 w-6 text-primary" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold">{destination}</h3>
+                    <p className="text-sm text-muted-foreground">
+                      {steps.find(s => s.id === 'researcher')?.details || '信息已收集'}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-3 gap-4 text-center">
+                  {steps.map((step) => (
+                    <div key={step.id} className="space-y-1">
+                      <p className="text-xs text-muted-foreground">{step.name}</p>
+                      <p className="text-sm font-medium text-green-600 dark:text-green-400">
+                        <Check className="h-3 w-3 inline mr-1" />
+                        完成
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Action Buttons */}
+            <div className="flex gap-3">
+              <Button
+                size="lg"
+                className="flex-1"
+                onClick={handleViewAgent}
+              >
+                开始使用
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </Button>
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={handleCreateAnother}
+              >
+                创建新 Agent
+              </Button>
+            </div>
+          </div>
+        )}
+
+        {/* Error State */}
+        {status === 'error' && (
+          <div className="space-y-8 text-center">
+            <div className="h-20 w-20 rounded-full bg-destructive/10 flex items-center justify-center mx-auto">
+              <AlertCircle className="h-10 w-10 text-destructive" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-destructive">创建失败</h1>
+              <p className="text-muted-foreground mt-2">{error}</p>
+            </div>
+            <Button variant="outline" size="lg" onClick={reset}>
+              重试
+            </Button>
           </div>
         )}
       </main>
