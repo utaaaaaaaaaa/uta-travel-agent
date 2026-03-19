@@ -87,6 +87,9 @@ func (m *AgentMemory) AddAction(action string, params map[string]any) *MemoryIte
 
 // AddResult adds a result to memory
 func (m *AgentMemory) AddResult(result string, success bool, metadata map[string]any) *MemoryItem {
+	if metadata == nil {
+		metadata = make(map[string]any)
+	}
 	metadata["success"] = success
 	return m.Add("result", result, metadata)
 }

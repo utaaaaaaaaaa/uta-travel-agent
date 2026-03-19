@@ -418,6 +418,362 @@ func TestExtractURLs(t *testing.T) {
 	}
 }
 
+// TestCuratorAgentCreation tests creating a new curator agent
+func TestCuratorAgentCreation(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:        "curator",
+			Version:     "v1.0.0",
+			Description: "Curator Agent template",
+		},
+		Spec: TemplateSpec{
+			Role: "Information organizer and knowledge builder",
+			Decision: DecisionConfig{
+				Model:         "claude-sonnet-4-6",
+				Temperature:   0.3,
+				MaxIterations: 20,
+				Timeout:       300 * time.Second,
+			},
+		},
+	}
+
+	agent := NewCuratorAgent("curator-001", template)
+
+	assert.Equal(t, "curator-001", agent.ID())
+	assert.Equal(t, AgentTypeCurator, agent.Type())
+	assert.Equal(t, StateIdle, agent.State())
+	assert.NotNil(t, agent.Memory())
+}
+
+// TestCuratorAgentRunWithSuccess tests running the curator with successful execution
+func TestCuratorAgentRunWithSuccess(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "curator",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 20,
+				Timeout:       300 * time.Second,
+			},
+		},
+	}
+
+	agent := NewCuratorAgent("curator-001", template)
+	mockRegistry := NewMockToolRegistry()
+
+	// Setup mock results for build_knowledge_base skill
+	mockRegistry.SetResult("build_knowledge_base", &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"knowledge_base": map[string]any{
+				"destination": "Kyoto",
+				"categories": map[string]any{
+					"attractions": []any{
+						map[string]any{
+							"id":          "attr-001",
+							"name":        "Kinkaku-ji",
+							"description": "Golden Pavilion",
+							"tags":        []string{"temple", "world-heritage"},
+						},
+					},
+				},
+			},
+			"statistics": map[string]any{
+				"total_items":   45,
+				"quality_score": 0.92,
+			},
+		},
+	})
+
+	agent.SetTools(mockRegistry)
+
+	ctx := context.Background()
+	result, err := agent.Run(ctx, "Organize Kyoto travel information")
+
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "curator-001", result.AgentID)
+	assert.Equal(t, AgentTypeCurator, result.AgentType)
+	assert.NotZero(t, result.Duration)
+
+	// Verify tool calls
+	assert.Equal(t, 1, mockRegistry.GetCallCount("build_knowledge_base"))
+}
+
+// TestCuratorAgentSkillFailure tests curator behavior when skill fails
+func TestCuratorAgentSkillFailure(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "curator",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 20,
+				Timeout:       300 * time.Second,
+			},
+		},
+	}
+
+	agent := NewCuratorAgent("curator-001", template)
+	mockRegistry := NewMockToolRegistry()
+
+	// Setup skill failure
+	mockRegistry.SetError("build_knowledge_base", errors.New("skill execution failed"))
+
+	agent.SetTools(mockRegistry)
+
+	ctx := context.Background()
+	result, err := agent.Run(ctx, "Organize travel information")
+
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "skill execution failed")
+	assert.Equal(t, StateIdle, agent.State())
+}
+
+// TestCuratorAgentMemoryTracking tests that curator properly tracks memory
+func TestCuratorAgentMemoryTracking(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "curator",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 20,
+				Timeout:       300 * time.Second,
+			},
+		},
+	}
+
+	agent := NewCuratorAgent("curator-001", template)
+	mockRegistry := NewMockToolRegistry()
+
+	mockRegistry.SetResult("build_knowledge_base", &ToolResult{
+		Success: true,
+		Data:    map[string]any{"knowledge_base": map[string]any{}},
+	})
+
+	agent.SetTools(mockRegistry)
+
+	ctx := context.Background()
+	_, err := agent.Run(ctx, "Organize test data")
+
+	require.NoError(t, err)
+
+	// Check memory was populated
+	thoughts := agent.Memory().GetByType("thought")
+	assert.NotEmpty(t, thoughts)
+	assert.Contains(t, thoughts[0].Content, "整理目标")
+
+	results := agent.Memory().GetByType("result")
+	assert.NotEmpty(t, results)
+}
+
+// TestCuratorAgentStop tests stopping the curator agent
+func TestCuratorAgentStop(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "curator",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 20,
+				Timeout:       300 * time.Second,
+			},
+		},
+	}
+
+	agent := NewCuratorAgent("curator-001", template)
+	agent.SetState(StateRunning)
+
+	err := agent.Stop()
+	require.NoError(t, err)
+	assert.Equal(t, StateIdle, agent.State())
+}
+
+// TestIndexerAgentCreation tests creating a new indexer agent
+func TestIndexerAgentCreation(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:        "indexer",
+			Version:     "v1.0.0",
+			Description: "Indexer Agent template",
+		},
+		Spec: TemplateSpec{
+			Role: "Vector index builder for RAG",
+			Decision: DecisionConfig{
+				Model:         "claude-sonnet-4-6",
+				Temperature:   0.1,
+				MaxIterations: 15,
+				Timeout:       600 * time.Second,
+			},
+			IndexConfig: &IndexConfig{
+				VectorSize:     768,
+				DistanceMetric: "Cosine",
+				ChunkSize:      384,
+				ChunkOverlap:   50,
+			},
+		},
+	}
+
+	agent := NewIndexerAgent("indexer-001", template)
+
+	assert.Equal(t, "indexer-001", agent.ID())
+	assert.Equal(t, AgentTypeIndexer, agent.Type())
+	assert.Equal(t, StateIdle, agent.State())
+	assert.NotNil(t, agent.Memory())
+}
+
+// TestIndexerAgentRunWithSuccess tests running the indexer with successful execution
+func TestIndexerAgentRunWithSuccess(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "indexer",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 15,
+				Timeout:       600 * time.Second,
+			},
+		},
+	}
+
+	agent := NewIndexerAgent("indexer-001", template)
+	mockRegistry := NewMockToolRegistry()
+
+	// Setup mock results for build_knowledge_index skill
+	mockRegistry.SetResult("build_knowledge_index", &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"collection_name": "kyoto-agent-001",
+			"status":          "created",
+			"statistics": map[string]any{
+				"total_items":   45,
+				"total_chunks":  78,
+				"total_vectors": 78,
+			},
+			"config": map[string]any{
+				"vector_size":     768,
+				"distance_metric": "cosine",
+			},
+		},
+	})
+
+	agent.SetTools(mockRegistry)
+
+	ctx := context.Background()
+	result, err := agent.Run(ctx, "Build index for Kyoto knowledge base")
+
+	require.NoError(t, err)
+	assert.True(t, result.Success)
+	assert.Equal(t, "indexer-001", result.AgentID)
+	assert.Equal(t, AgentTypeIndexer, result.AgentType)
+	assert.NotZero(t, result.Duration)
+
+	// Verify tool calls
+	assert.Equal(t, 1, mockRegistry.GetCallCount("build_knowledge_index"))
+}
+
+// TestIndexerAgentSkillFailure tests indexer behavior when skill fails
+func TestIndexerAgentSkillFailure(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "indexer",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 15,
+				Timeout:       600 * time.Second,
+			},
+		},
+	}
+
+	agent := NewIndexerAgent("indexer-001", template)
+	mockRegistry := NewMockToolRegistry()
+
+	// Setup skill failure
+	mockRegistry.SetError("build_knowledge_index", errors.New("embedding service unavailable"))
+
+	agent.SetTools(mockRegistry)
+
+	ctx := context.Background()
+	result, err := agent.Run(ctx, "Build index for knowledge base")
+
+	require.Error(t, err)
+	assert.False(t, result.Success)
+	assert.Contains(t, result.Error, "embedding service unavailable")
+	assert.Equal(t, StateIdle, agent.State())
+}
+
+// TestIndexerAgentMemoryTracking tests that indexer properly tracks memory
+func TestIndexerAgentMemoryTracking(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "indexer",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 15,
+				Timeout:       600 * time.Second,
+			},
+		},
+	}
+
+	agent := NewIndexerAgent("indexer-001", template)
+	mockRegistry := NewMockToolRegistry()
+
+	mockRegistry.SetResult("build_knowledge_index", &ToolResult{
+		Success: true,
+		Data:    map[string]any{"collection_name": "test-collection"},
+	})
+
+	agent.SetTools(mockRegistry)
+
+	ctx := context.Background()
+	_, err := agent.Run(ctx, "Build index")
+
+	require.NoError(t, err)
+
+	// Check memory was populated
+	thoughts := agent.Memory().GetByType("thought")
+	assert.NotEmpty(t, thoughts)
+	assert.Contains(t, thoughts[0].Content, "索引目标")
+
+	results := agent.Memory().GetByType("result")
+	assert.NotEmpty(t, results)
+}
+
+// TestIndexerAgentStop tests stopping the indexer agent
+func TestIndexerAgentStop(t *testing.T) {
+	template := &AgentTemplate{
+		Metadata: TemplateMetadata{
+			Name:    "indexer",
+			Version: "v1.0.0",
+		},
+		Spec: TemplateSpec{
+			Decision: DecisionConfig{
+				MaxIterations: 15,
+				Timeout:       600 * time.Second,
+			},
+		},
+	}
+
+	agent := NewIndexerAgent("indexer-001", template)
+	agent.SetState(StateRunning)
+
+	err := agent.Stop()
+	require.NoError(t, err)
+	assert.Equal(t, StateIdle, agent.State())
+}
+
 // TestResearcherAgentWithoutTools tests agent behavior when no tools are configured
 func TestResearcherAgentWithoutTools(t *testing.T) {
 	template := &AgentTemplate{
