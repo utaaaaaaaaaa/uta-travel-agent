@@ -4,7 +4,7 @@ Tests for RAG document processing module.
 
 import pytest
 
-from services.destination_agent.src.rag import (
+from rag import (
     Chunk,
     ChunkingConfig,
     Document,

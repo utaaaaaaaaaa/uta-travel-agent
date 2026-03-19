@@ -4,7 +4,7 @@ Tests for RAG embedding service.
 
 import pytest
 
-from services.destination_agent.src.rag import (
+from rag import (
     EmbeddingService,
     SentenceTransformerEmbedding,
 )

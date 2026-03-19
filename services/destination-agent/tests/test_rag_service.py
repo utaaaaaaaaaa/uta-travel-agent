@@ -5,7 +5,7 @@ Tests for RAG service and query functionality.
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from services.destination_agent.src.rag import (
+from rag import (
     QdrantVectorStore,
     RAGResponse,
     RAGService,
@@ -90,7 +90,7 @@ class TestRAGService:
     @pytest.fixture
     def mock_embedding(self):
         """Create mock embedding service."""
-        from services.destination_agent.src.rag import EmbeddingService
+        from rag import EmbeddingService
         service = MagicMock(spec=EmbeddingService)
         service.embed_query = AsyncMock(return_value=[0.1] * 384)
         service.get_dimension.return_value = 384

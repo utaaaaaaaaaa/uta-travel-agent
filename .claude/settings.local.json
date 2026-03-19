@@ -25,7 +25,9 @@
       "Bash(pip3 install:*)",
       "Bash(sudo apt-get:*)",
       "Bash(source .venv/bin/activate)",
-      "Bash(python test_rag_simple.py)"
+      "Bash(python test_rag_simple.py)",
+      "Bash(git diff:*)",
+      "Bash(pytest tests/ -v)"
     ]
   }
 }
