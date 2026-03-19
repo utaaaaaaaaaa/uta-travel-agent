@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.embedding;
 
-option go_package = "github.com/utaaa/uta-travel-agent/proto/embedding";
+option go_package = "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/embedding";
 
 // EmbedRequest is the request for creating embeddings
 message EmbedRequest {

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.llm;
 
-option go_package = "github.com/utaaa/uta-travel-agent/proto/llm";
+option go_package = "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/llm";
 
 // ChatMessage represents a single message in a conversation
 message ChatMessage {

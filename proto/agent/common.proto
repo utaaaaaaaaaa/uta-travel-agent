@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.common;
 
-option go_package = "github.com/utaaa/uta-travel-agent/proto/common";
+option go_package = "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/common";
 
 // Common message types used across services
 

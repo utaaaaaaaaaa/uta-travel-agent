@@ -7,7 +7,7 @@
 package destination
 
 import (
-	common "github.com/utaaa/uta-travel-agent/proto/common"
+	common "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/common"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"

@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.destination;
 
-option go_package = "github.com/utaaa/uta-travel-agent/proto/destination";
+option go_package = "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/destination";
 
 import "agent/common.proto";
 

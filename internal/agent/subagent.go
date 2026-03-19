@@ -345,6 +345,14 @@ func extractURLs(result any) ([]string, bool) {
 		return nil, false
 	}
 
+	// Handle ToolResult type
+	if tr, ok := result.(*ToolResult); ok {
+		if tr.Data != nil {
+			return extractURLs(tr.Data)
+		}
+		return nil, false
+	}
+
 	// Handle different result formats
 	switch v := result.(type) {
 	case map[string]any:
@@ -359,6 +367,10 @@ func extractURLs(result any) ([]string, bool) {
 				}
 			}
 			return result, true
+		}
+		// Handle results array in map (like {"results": [...]})
+		if results, ok := v["results"].([]any); ok {
+			return extractURLs(results)
 		}
 	case []any:
 		var urls []string

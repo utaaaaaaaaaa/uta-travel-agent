@@ -2,7 +2,7 @@ syntax = "proto3";
 
 package agent.vision;
 
-option go_package = "github.com/utaaa/uta-travel-agent/proto/vision";
+option go_package = "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/vision";
 
 // AnalyzeRequest is the request for image analysis
 message AnalyzeRequest {
