@@ -4,9 +4,11 @@ FastAPI main application for Destination Agent service.
 
 import logging
 from contextlib import asynccontextmanager
+from typing import AsyncGenerator
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from agent import AgentConfig, AgentService, DestinationAgent, Settings
@@ -33,7 +35,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Destination Agent Service",
-    description="Creates and manages travel destination knowledge bases",
+    description="Creates and manages travel destination knowledge bases with RAG",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -65,18 +67,46 @@ class AgentResponse(BaseModel):
     destination: str
     status: str
     document_count: int
+    chunk_count: int = 0
+
+
+class QueryRequest(BaseModel):
+    question: str
+    top_k: int = 5
+
+
+class QueryResponse(BaseModel):
+    answer: str
+    sources: list[dict]
+    confidence: float
+    question: str
 
 
 # API endpoints
 @app.get("/health")
 async def health_check():
     """Health check endpoint."""
-    return {"status": "healthy", "service": "destination-agent"}
+    return {
+        "status": "healthy",
+        "service": "destination-agent",
+        "embedding_model": service._embedding_service.get_model_name() if service else None,
+    }
 
 
 @app.post("/agents", response_model=AgentResponse)
 async def create_agent(request: CreateAgentRequest):
-    """Create a new destination agent."""
+    """
+    Create a new destination agent.
+
+    This will:
+    1. Research the destination online
+    2. Process and chunk documents
+    3. Create vector embeddings
+    4. Store in Qdrant
+
+    The agent will be in 'creating' status initially.
+    Poll the GET endpoint to check when it's ready.
+    """
     if not service:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -97,6 +127,7 @@ async def create_agent(request: CreateAgentRequest):
         destination=agent.destination,
         status=agent.status,
         document_count=agent.document_count,
+        chunk_count=agent.chunk_count,
     )
 
 
@@ -118,6 +149,7 @@ async def get_agent(agent_id: str):
         destination=agent.destination,
         status=agent.status,
         document_count=agent.document_count,
+        chunk_count=agent.chunk_count,
     )
 
 
@@ -138,6 +170,7 @@ async def list_agents(user_id: str):
                 destination=a.destination,
                 status=a.status,
                 document_count=a.document_count,
+                chunk_count=a.chunk_count,
             )
             for a in agents
         ]
@@ -146,7 +179,7 @@ async def list_agents(user_id: str):
 
 @app.delete("/agents/{agent_id}")
 async def delete_agent(agent_id: str):
-    """Delete an agent."""
+    """Delete an agent and its knowledge base."""
     if not service:
         raise HTTPException(status_code=503, detail="Service not initialized")
 
@@ -155,6 +188,88 @@ async def delete_agent(agent_id: str):
         raise HTTPException(status_code=404, detail="Agent not found")
 
     return {"status": "deleted"}
+
+
+@app.post("/agents/{agent_id}/query", response_model=QueryResponse)
+async def query_agent(agent_id: str, request: QueryRequest):
+    """
+    Query an agent's knowledge base using RAG.
+
+    The agent must be in 'ready' status to accept queries.
+    """
+    if not service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    try:
+        response = await service.query_agent(
+            agent_id=agent_id,
+            question=request.question,
+            top_k=request.top_k,
+        )
+
+        return QueryResponse(
+            answer=response.answer,
+            sources=response.sources,
+            confidence=response.confidence,
+            question=response.query,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.post("/agents/{agent_id}/query/stream")
+async def query_agent_stream(agent_id: str, request: QueryRequest):
+    """
+    Query an agent's knowledge base with streaming response.
+
+    Returns the answer as it's generated for real-time display.
+    """
+    if not service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    async def generate() -> AsyncGenerator[str, None]:
+        try:
+            # For now, return non-streaming response
+            # TODO: Implement actual streaming with Claude
+            response = await service.query_agent(
+                agent_id=agent_id,
+                question=request.question,
+                top_k=request.top_k,
+            )
+            yield f"data: {response.answer}\n\n"
+            yield "data: [DONE]\n\n"
+        except ValueError as e:
+            yield f"data: [ERROR] {str(e)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+    )
+
+
+@app.get("/agents/{agent_id}/stats")
+async def get_agent_stats(agent_id: str):
+    """Get statistics about an agent's knowledge base."""
+    if not service:
+        raise HTTPException(status_code=503, detail="Service not initialized")
+
+    agent = await service.get_agent(agent_id)
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    # Get collection stats from Qdrant
+    stats = await service._vector_store.get_collection_stats(
+        agent.vector_collection_id
+    )
+
+    return {
+        "agent_id": agent.id,
+        "destination": agent.destination,
+        "status": agent.status,
+        "document_count": agent.document_count,
+        "chunk_count": agent.chunk_count,
+        "vector_store": stats,
+    }
 
 
 if __name__ == "__main__":

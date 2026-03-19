@@ -17,6 +17,9 @@ dependencies = [
     "beautifulsoup4>=4.12.0",
     "trafilatura>=1.6.0",
     "tiktoken>=0.6.0",
+    "sentence-transformers>=2.6.0",
+    "numpy>=1.26.0",
+    "tenacity>=8.2.0",
 ]
 
 [project.optional-dependencies]
