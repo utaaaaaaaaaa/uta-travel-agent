@@ -70,3 +70,6 @@ memory/*.md.bak
 
 # Build artifacts
 *.tar.gz
+
+# Test coverage
+coverage/
