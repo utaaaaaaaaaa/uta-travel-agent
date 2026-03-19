@@ -1,0 +1,45 @@
+# MVP Development Environment
+# Quick start: docker-compose -f docker-compose.dev.yml up -d
+
+version: '3.8'
+
+services:
+  # Qdrant - Vector database (required)
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: uta-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Destination Agent - FastAPI service
+  destination-agent:
+    build:
+      context: ../..
+      dockerfile: infra/docker/Dockerfile.destination-agent
+    container_name: uta-destination-agent
+    ports:
+      - "8001:8001"
+    environment:
+      - PORT=8001
+      - QDRANT_HOST=qdrant
+      - QDRANT_PORT=6333
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  qdrant_data:
