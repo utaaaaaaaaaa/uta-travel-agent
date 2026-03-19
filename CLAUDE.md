@@ -152,28 +152,211 @@ src/
 - 服务间通信
 - 使用 `buf` 管理 Proto
 
-## Multi-Agent Workflow
+## Multi-Agent Architecture
 
-### 目的地Agent创建流程
+### 核心设计理念
+
+**MainAgent 是中央编排者**，负责：
+- 接收用户请求
+- 分解任务
+- 编排 Subagent 协作
+- 汇总结果
+- 持久化 Agent
+
+**Subagent 各司其职**，每个 Agent 有独立的：
+- 职责边界
+- 工具集
+- Prompt 模板
+- 状态管理
+
+### Agent 层级结构
 
 ```
-用户请求 → Orchestrator (解析/分配/监控/持久化)
-         → Destination Agent
-            → Researcher (搜索/提取)
-            → Curator (整理/构建知识图谱)
-            → Indexer (向量化/RAG索引)
-         → 保存到 PostgreSQL + Qdrant
+┌─────────────────────────────────────────────────────────────┐
+│                        MainAgent                             │
+│  (中央编排者 - 任务分解、调度、监控、汇总)                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐       │
+│  │  Researcher  │  │   Curator    │  │   Indexer    │       │
+│  │   Agent      │  │   Agent      │  │   Agent      │       │
+│  │              │  │              │  │              │       │
+│  │ • 网页搜索   │  │ • 信息整理   │  │ • 文本切分   │       │
+│  │ • 内容抓取   │  │ • 质量筛选   │  │ • 向量化     │       │
+│  │ • 数据提取   │  │ • 知识图谱   │  │ • RAG索引    │       │
+│  └──────────────┘  └──────────────┘  └──────────────┘       │
+│                                                              │
+│  ┌──────────────┐  ┌──────────────┐                         │
+│  │ Guide Agent  │  │Planner Agent │                         │
+│  │              │  │              │                         │
+│  │ • 景点讲解   │  │ • 行程规划   │                         │
+│  │ • RAG查询    │  │ • 时间优化   │                         │
+│  │ • 位置服务   │  │ • 预算估算   │                         │
+│  └──────────────┘  └──────────────┘                         │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### 目的地 Agent 创建流程 (核心流程)
+
+```
+用户请求: "帮我创建一个京都的导游 Agent"
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ MainAgent 接收请求                                           │
+│ • 解析目标: destination="京都", theme="cultural"             │
+│ • 创建任务计划                                                │
+│ • 初始化进度追踪                                              │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 1: 调用 Researcher Agent                                │
+│ ─────────────────────────────                                │
+│ 工具: web_search, web_crawler, content_extractor            │
+│ 任务:                                                        │
+│   1. 搜索京都旅游景点、历史文化、美食等信息                    │
+│   2. 爬取权威旅游网站内容                                     │
+│   3. 提取结构化数据 (景点名、地址、简介、开放时间等)           │
+│ 输出: raw_documents[] (原始文档集合)                          │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 2: 调用 Curator Agent                                   │
+│ ─────────────────────────                                    │
+│ 工具: llm_summarize, knowledge_graph_builder                 │
+│ 任务:                                                        │
+│   1. 去重、清洗、质量筛选                                     │
+│   2. 信息整合、摘要生成                                       │
+│   3. 构建知识图谱 (景点关系、主题分类)                        │
+│ 输出: curated_documents[] (整理后的文档)                      │
+│       knowledge_graph (知识图谱)                             │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ Step 3: 调用 Indexer Agent                                   │
+│ ─────────────────────────                                    │
+│ 工具: text_chunker, embedding_service, qdrant_client         │
+│ 任务:                                                        │
+│   1. 文本分块 (按语义边界切分)                                │
+│   2. 生成向量 Embedding                                      │
+│   3. 存入 Qdrant 向量数据库                                   │
+│ 输出: collection_id (Qdrant 集合ID)                          │
+│       chunk_count (分块数量)                                  │
+└─────────────────────────────────────────────────────────────┘
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ MainAgent 汇总 & 持久化                                       │
+│ ─────────────────────                                        │
+│ • 创建 DestinationAgent 记录 (PostgreSQL)                    │
+│ • 关联 VectorCollectionID (Qdrant)                           │
+│ • 存储原始文档 (S3/MinIO)                                    │
+│ • 更新用户 Agent 列表                                         │
+│ • 返回创建结果给用户                                          │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 ### 实时导游流程
 
 ```
-加载Agent (PostgreSQL元数据 + Qdrant索引)
-→ WebSocket 实时交互
-   - 位置更新 → 查询景点 → RAG → 推送讲解
-   - 拍照识别 → 图像分析 → RAG → 文化讲解
-   - 提问 → RAG → LLM → 回复
-→ 会话保存 (Redis/PostgreSQL)
+用户进入导游模式 (加载已创建的 Kyoto Agent)
+                    │
+                    ▼
+┌─────────────────────────────────────────────────────────────┐
+│ MainAgent 加载 Destination Agent                             │
+│ • 从 PostgreSQL 读取元数据                                   │
+│ • 获取 Qdrant Collection ID                                  │
+│ • 创建 Guide Agent 实例 (绑定该 Collection)                  │
+└─────────────────────────────────────────────────────────────┘
+                    │
+        ┌───────────┼───────────┐
+        ▼           ▼           ▼
+   ┌─────────┐ ┌─────────┐ ┌─────────┐
+   │ 位置更新 │ │ 拍照识别 │ │ 文字提问 │
+   └─────────┘ └─────────┘ └─────────┘
+        │           │           │
+        ▼           ▼           ▼
+   ┌─────────────────────────────────────┐
+   │         Guide Agent 处理             │
+   │ • RAG 查询 (Qdrant Vector Search)   │
+   │ • LLM 生成回复 (带上下文)            │
+   │ • 流式返回讲解内容                   │
+   └─────────────────────────────────────┘
+```
+
+### Subagent 职责详解
+
+| Agent | 职责 | 工具 | 输入 | 输出 |
+|-------|------|------|------|------|
+| **Researcher** | 信息搜集 | web_search, crawler, extractor | 目的地名称 | raw_documents[] |
+| **Curator** | 内容整理 | llm, knowledge_graph | raw_documents | curated_docs, graph |
+| **Indexer** | 向量索引 | chunker, embedding, qdrant | curated_docs | collection_id |
+| **Guide** | 实时讲解 | rag_query, location | question, location | 讲解内容 |
+| **Planner** | 行程规划 | llm, constraint_solver | 偏好、时间、预算 | itinerary |
+
+### Agent 通信机制
+
+```
+Go (Orchestration)          Python (Services)
+     │                            │
+     │  gRPC                      │
+     ├──────────────────────────► │
+     │  CreateDestinationRequest  │
+     │                            │
+     │  ◄──────────────────────────┤
+     │  StreamProgress (SSE)      │
+     │                            │
+     │  gRPC: LLM/Embedding/Vision│
+     ├──────────────────────────► │
+```
+
+### 任务编排模式
+
+MainAgent 使用 **任务链模式** 编排 Subagent：
+
+```go
+// 伪代码
+func (a *MainAgent) CreateDestinationAgent(ctx context.Context, destination string) error {
+    // 1. 创建任务计划
+    plan := a.createPlan("create_destination_agent")
+
+    // 2. 顺序执行 Subagent 任务
+    rawDocs := a.researcher.Search(ctx, destination)
+    a.reportProgress("research_complete", len(rawDocs))
+
+    curatedDocs := a.curator.Curate(ctx, rawDocs)
+    a.reportProgress("curation_complete", len(curatedDocs))
+
+    collectionID := a.indexer.Index(ctx, curatedDocs)
+    a.reportProgress("indexing_complete", collectionID)
+
+    // 3. 持久化
+    a.persistence.SaveDestinationAgent(destination, collectionID)
+
+    return nil
+}
+```
+
+### 进度反馈机制
+
+创建过程通过 SSE 实时反馈前端：
+
+```
+event: progress
+data: {"stage": "researching", "progress": 20, "message": "正在搜索京都旅游信息..."}
+
+event: progress
+data: {"stage": "curating", "progress": 50, "message": "已找到 42 篇文档，正在整理..."}
+
+event: progress
+data: {"stage": "indexing", "progress": 80, "message": "正在构建向量索引..."}
+
+event: complete
+data: {"agent_id": "agent-123", "status": "ready"}
 ```
 
 ## Development Documentation
@@ -247,3 +430,78 @@ feat/fix/docs/test/refactor/chore(scope): message
 - Rust 沙箱可选，初期可用 Python 替代
 - 优先使用 Claude API
 - 同步编写测试和文档
+
+## v0.3.0-alpha 开发计划
+
+**目标**: 实现完整的目的地 Agent 创建流程 (MainAgent 编排 Subagent)
+
+### Phase 1: 基础设施 (Week 1)
+
+1. **Qdrant 向量数据库集成**
+   - Docker Compose 添加 Qdrant 服务
+   - Go Qdrant 客户端封装
+   - Collection 创建/管理 API
+
+2. **Embedding gRPC 服务**
+   - Python Embedding 服务完善
+   - 支持文本 Embedding API
+   - 批量 Embedding 优化
+
+### Phase 2: Subagent 实现 (Week 2)
+
+3. **Researcher Agent**
+   - 网页搜索工具 (SerpAPI/自定义爬虫)
+   - 内容提取和清洗
+   - 输出结构化文档
+
+4. **Curator Agent**
+   - 文档质量评估
+   - 信息去重和整合
+   - 生成知识摘要
+
+5. **Indexer Agent**
+   - 文本分块策略
+   - 调用 Embedding 服务
+   - 写入 Qdrant 索引
+
+### Phase 3: MainAgent 编排 (Week 3)
+
+6. **任务编排引擎**
+   - Subagent 注册和发现
+   - 任务链执行
+   - 错误处理和重试
+
+7. **进度反馈系统**
+   - SSE 进度推送
+   - 前端进度展示
+   - 创建状态持久化
+
+### Phase 4: 前端创建流程 (Week 4)
+
+8. **目的地创建向导**
+   - Step 1: 输入目的地信息
+   - Step 2: 实时进度展示
+   - Step 3: 创建完成/预览
+
+9. **Agent 管理页面**
+   - Agent 列表/详情
+   - 删除/更新操作
+   - 快速启动导游模式
+
+### 技术依赖
+
+| 组件 | 用途 | 状态 |
+|------|------|------|
+| Qdrant | 向量存储 | 待集成 |
+| Embedding Service | 文本向量化 | 待完善 |
+| SerpAPI / 爬虫 | 网页搜索 | 待实现 |
+| PostgreSQL | Agent 元数据 | 待集成 |
+| Redis | 任务状态缓存 | 待集成 |
+
+### 验收标准
+
+- [ ] 用户可以输入目的地名称创建 Agent
+- [ ] 创建过程有实时进度反馈
+- [ ] 创建完成后可以与 Agent 对话
+- [ ] Agent 回答基于 RAG 检索的知识
+- [ ] Agent 数据持久化到 PostgreSQL
