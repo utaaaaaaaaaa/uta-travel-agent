@@ -120,10 +120,10 @@ class DocumentProcessor:
         # Remove common web artifacts
         text = re.sub(r"(?i)(cookie|subscribe|newsletter|sign up|log in).*", "", text)
 
-        # Normalize quotes and dashes
-        text = text.replace('"', '"').replace('"', '"')
-        text = text.replace(''', "'").replace(''', "'")
-        text = text.replace('—', '-').replace('–', '-')
+        # Normalize quotes and dashes (using Unicode code points)
+        text = text.replace('\u201c', '"').replace('\u201d', '"')  # Left/right double quotes
+        text = text.replace('\u2018', "'").replace('\u2019', "'")  # Left/right single quotes
+        text = text.replace('\u2014', '-').replace('\u2013', '-')  # Em dash, en dash
 
         return text.strip()
 

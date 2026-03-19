@@ -85,16 +85,19 @@ class TestDocumentProcessor:
 
 
         And multiple newlines.
-        'smart quotes' and "double quotes"
-        —em dashes—
+        \u2018smart quotes\u2019 and \u201cdouble quotes\u201d
+        \u2014em dashes\u2014
         """
 
         cleaned = processor._clean_text(dirty_text)
 
         assert "  " not in cleaned  # No double spaces
         assert "\n\n\n" not in cleaned  # No triple newlines
-        assert "'" in cleaned  # Normal quotes
-        assert '"' not in cleaned  # No smart quotes
+        assert "'" in cleaned  # Normal single quotes
+        assert '"' in cleaned  # Normal double quotes (smart quotes converted to these)
+        assert "\u201c" not in cleaned  # No left smart quotes
+        assert "\u201d" not in cleaned  # No right smart quotes
+        assert "\u2014" not in cleaned  # No em dashes (converted to regular dash)
 
     def test_section_splitting(self, processor):
         """Test document splitting into sections."""

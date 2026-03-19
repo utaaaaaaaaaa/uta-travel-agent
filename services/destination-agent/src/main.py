@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
-from agent import AgentConfig, AgentService, DestinationAgent, Settings
+from .agent import AgentConfig, AgentService, DestinationAgent, Settings
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
