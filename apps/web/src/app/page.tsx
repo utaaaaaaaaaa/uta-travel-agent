@@ -14,6 +14,9 @@ export default function Home() {
             <span className="text-xl font-bold">UTA Travel</span>
           </div>
           <nav className="flex items-center gap-4">
+            <Link href="/chat">
+              <Button variant="ghost">AI 助手</Button>
+            </Link>
             <Link href="/destinations">
               <Button variant="ghost">我的目的地</Button>
             </Link>
@@ -40,15 +43,15 @@ export default function Home() {
             创建专属目的地 Agent，获取深度文化讲解。实地旅游时，AI 导游实时为你讲解景点背后的故事。
           </p>
           <div className="mt-10 flex gap-4">
-            <Link href="/destinations/create">
+            <Link href="/chat">
               <Button size="lg" className="gap-2">
                 <MapPin className="h-4 w-4" />
-                创建目的地 Agent
+                开始对话
               </Button>
             </Link>
-            <Link href="/destinations">
+            <Link href="/destinations/create">
               <Button size="lg" variant="outline">
-                我的目的地
+                创建目的地 Agent
               </Button>
             </Link>
           </div>

@@ -43,64 +43,27 @@ export default function CreateDestinationPage() {
 
     try {
       // Create agent via API
-      const agent = await createAgent({
+      const result = await createAgent({
         destination,
         theme: selectedTheme,
         languages: selectedLanguages,
       });
 
-      setCreatedAgent(agent);
+      setCreatedAgent({
+        id: result.agent_id,
+        destination: result.destination,
+        status: result.status,
+        document_count: 0,
+      } as Agent);
 
-      // Poll for status updates
-      const pollInterval = setInterval(async () => {
-        try {
-          const response = await fetch(
-            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/agents/${agent.id}`
-          );
-          const updatedAgent: Agent = await response.json();
-          setCreatedAgent(updatedAgent);
+      // Simulate progress
+      setProgress(50);
+      setCurrentTask("创建完成！");
 
-          // Update progress based on status
-          if (updatedAgent.status === 'ready') {
-            clearInterval(pollInterval);
-            setProgress(100);
-            setCurrentTask("创建完成！");
-            setTimeout(() => {
-              router.push(`/destinations/${agent.id}`);
-            }, 1500);
-          } else if (updatedAgent.status === 'failed') {
-            clearInterval(pollInterval);
-            setError("创建失败，请重试");
-          } else {
-            // Update progress based on document count
-            if (updatedAgent.document_count > 0) {
-              setProgress(60);
-              setCurrentTask("构建知识图谱...");
-            }
-            if (updatedAgent.chunk_count > 0) {
-              setProgress(80);
-              setCurrentTask("向量化存储...");
-            }
-          }
-        } catch (e) {
-          console.error('Poll error:', e);
-        }
-      }, 2000);
-
-      // Initial progress
-      setProgress(10);
-      setCurrentTask("搜索目的地信息...");
-
-      // Simulate progress while waiting
-      const progressInterval = setInterval(() => {
-        setProgress((prev) => Math.min(prev + 5, 50));
-      }, 500);
-
-      // Cleanup on unmount
-      return () => {
-        clearInterval(pollInterval);
-        clearInterval(progressInterval);
-      };
+      setTimeout(() => {
+        setProgress(100);
+        setStep(3);
+      }, 1000);
 
     } catch (e) {
       setError(e instanceof Error ? e.message : "创建失败");

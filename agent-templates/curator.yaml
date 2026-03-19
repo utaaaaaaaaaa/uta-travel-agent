@@ -1,0 +1,113 @@
+# Curator Agent Template
+# 知识策展人 Agent，负责整理和结构化收集的信息
+
+kind: AgentTemplate
+apiVersion: agent.uta/v1
+
+metadata:
+  name: curator
+  version: v1.0.0
+  description: |
+    Curator Agent 负责将 Researcher 收集的原始信息整理为结构化的知识库。
+    它会对信息进行分类、打标签、建立关联、去除重复。
+
+spec:
+  # Agent 角色定义
+  role: |
+    你是一个知识策展人。你的职责是将收集到的原始旅游信息整理为结构化的知识库。
+
+    你的工作包括：
+    1. 分类整理：将信息按类型、区域、主题等维度分类
+    2. 标签管理：为每个景点/项目添加适当的标签
+    3. 关联建立：建立景点之间的关系（如地理位置、游览顺序）
+    4. 去重合并：合并重复信息，保留最完整的版本
+    5. 质量检查：检查信息的完整性和一致性
+    6. 知识图谱：构建简单的知识关系网络
+
+    工作原则：
+    - 保持信息的准确性和一致性
+    - 建立清晰的结构便于后续检索
+    - 保留原始来源的可追溯性
+
+  # 能力声明
+  capabilities:
+    - categorize              # 分类整理
+    - tag                     # 标签管理
+    - deduplicate             # 去重合并
+    - validate                # 质量检查
+    - build_graph             # 构建知识图谱
+
+  # 可用工具
+  tools:
+    mcp:
+      - name: filesystem
+        description: 读取原始数据文件
+        required: true
+    skills:
+      - build_knowledge_base  # 构建知识库
+      - categorize_info       # 分类信息
+    services:
+      - llm_gateway           # LLM 服务（用于分类和打标签）
+
+  # 决策配置
+  decision:
+    model: claude-sonnet-4-6
+    temperature: 0.1
+    max_iterations: 20
+    timeout: 300s
+
+  # 输入来源
+  inputSource:
+    from: researcher
+    format: structured_data
+
+  # 输出格式
+  outputFormat:
+    type: structured
+    schema:
+      type: object
+      properties:
+        knowledge_base:
+          type: object
+          description: 结构化的知识库
+          properties:
+            categories:
+              type: object
+              additionalProperties:
+                type: array
+                items:
+                  $ref: "#/definitions/KnowledgeItem"
+            tags:
+              type: array
+              items:
+                type: string
+            relations:
+              type: array
+              items:
+                $ref: "#/definitions/Relation"
+            statistics:
+              type: object
+              properties:
+                total_items: { type: integer }
+                categories_count: { type: integer }
+                tags_count: { type: integer }
+
+  definitions:
+    KnowledgeItem:
+      type: object
+      properties:
+        id: { type: string }
+        name: { type: string }
+        category: { type: string }
+        tags: { type: array, items: { type: string } }
+        content: { type: string }
+        metadata: { type: object }
+        relations: { type: array, items: { type: string } }
+
+    Relation:
+      type: object
+      properties:
+        from: { type: string }
+        to: { type: string }
+        type: { type: string }
+        description: { type: string }

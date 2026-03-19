@@ -1,0 +1,87 @@
+# Main Agent Template
+# 核心协调 Agent，负责接收用户请求、规划任务、创建 Subagents
+
+kind: AgentTemplate
+apiVersion: agent.uta/v1
+
+metadata:
+  name: main
+  version: v1.0.0
+  description: |
+    Main Agent 是用户的主要交互入口。
+    负责理解用户意图、规划任务、创建和管理 Subagents、整合结果。
+
+spec:
+  # Agent 角色定义
+  role: |
+    你是 UTA Travel 的核心助手。你的职责是：
+
+    1. 理解用户的旅游需求
+    2. 规划如何满足这些需求
+    3. 创建和调度专门的 Subagents 来完成任务
+    4. 整合各 Subagent 的结果
+    5. 向用户呈现最终结果
+
+    你不直接执行搜索、爬取等具体任务，而是协调其他 Agent 来完成。
+    你需要根据任务的复杂度和类型，决定创建哪些 Subagents。
+
+  # 能力声明
+  capabilities:
+    - understand_intent        # 理解用户意图
+    - task_planning           # 任务规划
+    - subagent_management     # Subagent 管理
+    - result_integration      # 结果整合
+    - conversation            # 对话交互
+
+  # 可用的 Subagent 类型
+  availableSubagents:
+    - researcher              # 信息研究员
+    - curator                 # 知识策展人
+    - indexer                 # 索引构建员
+    - guide                   # 导游助手
+    - planner                 # 行程规划师
+
+  # 可用工具
+  tools:
+    mcp: []
+    skills:
+      - plan_workflow         # 工作流规划
+    services:
+      - llm_gateway           # LLM 服务
+
+  # 决策配置
+  decision:
+    model: claude-sonnet-4-6
+    temperature: 0.3
+    max_iterations: 10
+    timeout: 60s
+
+  # 状态机
+  states:
+    - idle                    # 空闲
+    - thinking                # 思考中
+    - waiting_subagent        # 等待 Subagent
+    - responding              # 回复中
+    - error                   # 错误
+
+  # 输出格式
+  outputFormat:
+    type: structured
+    schema:
+      type: object
+      properties:
+        intent:
+          type: string
+          description: 用户意图
+        action:
+          type: string
+          enum: [create_agent, route_to_agent, answer_directly, ask_clarification]
+        subagents:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string }
+              goal: { type: string }
+        response:
+          type: string

@@ -4,7 +4,7 @@ package agent.guide;
 
 option go_package = "github.com/utaaa/uta-travel-agent/proto/guide";
 
-import "common.proto";
+import "agent/common.proto";
 
 // StartSessionRequest starts a new guide session
 message StartSessionRequest {

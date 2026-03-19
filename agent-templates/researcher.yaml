@@ -1,0 +1,165 @@
+# Researcher Agent Template
+# 信息研究员 Agent，负责搜索和收集目的地信息
+
+kind: AgentTemplate
+apiVersion: agent.uta/v1
+
+metadata:
+  name: researcher
+  version: v1.0.0
+  description: |
+    Researcher Agent 负责全面收集目的地的旅游信息。
+    它会自主决定搜索什么内容、何时停止收集、如何整理信息。
+
+spec:
+  # Agent 角色定义
+  role: |
+    你是一个专业的旅游信息研究员。你的目标是全面收集指定目的地的旅游信息。
+
+    你需要收集的信息类型包括：
+    - 著名景点和地标
+    - 当地美食和餐厅
+    - 交通方式和路线
+    - 住宿推荐
+    - 文化习俗和注意事项
+    - 最佳旅游时间
+    - 预算参考
+
+    工作原则：
+    1. 确保信息的准确性和时效性
+    2. 从多个来源交叉验证重要信息
+    3. 优先收集官方和权威来源的信息
+    4. 记录信息来源以便追溯
+
+    你需要自主决定：
+    - 搜索什么关键词
+    - 需要爬取哪些网站
+    - 信息是否足够全面
+    - 何时可以结束收集
+
+  # 能力声明
+  capabilities:
+    - search_web              # 网络搜索
+    - crawl_pages             # 网页爬取
+    - extract_content         # 内容提取
+    - summarize               # 信息摘要
+    - validate_info           # 信息验证
+
+  # 可用工具
+  tools:
+    mcp:
+      - name: brave_search
+        description: 使用 Brave 搜索网络信息
+        required: true
+      - name: web_reader
+        description: 抓取并解析网页内容
+        required: true
+      - name: filesystem
+        description: 保存原始文档和数据
+        required: false
+    skills:
+      - extract_travel_info   # 提取旅游信息
+      - validate_source       # 验证来源可信度
+    services:
+      - llm_gateway           # LLM 服务（用于摘要和提取）
+
+  # 决策配置
+  decision:
+    model: claude-sonnet-4-6
+    temperature: 0.2
+    max_iterations: 30
+    timeout: 600s
+
+    # 停止条件
+    stopConditions:
+      - type: goal_achieved
+        description: 信息收集完成
+        checkPrompt: |
+          检查已收集的信息是否足够全面：
+          - 景点信息: {{.AttractionsCount}} 条
+          - 美食信息: {{.FoodCount}} 条
+          - 交通信息: {{.TransportCount}} 条
+          - 住宿信息: {{.AccommodationCount}} 条
+
+          是否足够？如果是，返回 { "complete": true, "summary": "..." }
+      - type: max_iterations
+        value: 30
+      - type: timeout
+        value: 600s
+      - type: user_cancel
+
+  # 记忆配置
+  memory:
+    type: working
+    maxSize: 50
+    retention: session
+    store:
+      - search_history        # 搜索历史
+      - visited_urls          # 访问过的 URL
+      - collected_info        # 已收集的信息
+      - pending_topics        # 待搜索的主题
+
+  # 状态机
+  states:
+    - idle                    # 空闲
+    - planning                # 规划搜索策略
+    - searching               # 搜索中
+    - crawling                # 爬取中
+    - extracting              # 提取中
+    - summarizing             # 摘要中
+    - reporting               # 汇报中
+    - completed               # 完成
+    - error                   # 错误
+
+  # 输出格式
+  outputFormat:
+    type: structured
+    schema:
+      type: object
+      properties:
+        destination:
+          type: string
+          description: 目的地名称
+        categories:
+          type: object
+          properties:
+            attractions:
+              type: array
+              items:
+                $ref: "#/definitions/InfoItem"
+            food:
+              type: array
+              items:
+                $ref: "#/definitions/InfoItem"
+            transport:
+              type: array
+              items:
+                $ref: "#/definitions/InfoItem"
+            accommodation:
+              type: array
+              items:
+                $ref: "#/definitions/InfoItem"
+            tips:
+              type: array
+              items:
+                $ref: "#/definitions/InfoItem"
+        sources:
+          type: array
+          items:
+            type: string
+        summary:
+          type: string
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+
+  definitions:
+    InfoItem:
+      type: object
+      properties:
+        name: { type: string }
+        description: { type: string }
+        details: { type: object }
+        source: { type: string }
+        lastUpdated: { type: string, format: date-time }

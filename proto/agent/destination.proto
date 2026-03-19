@@ -4,7 +4,7 @@ package agent.destination;
 
 option go_package = "github.com/utaaa/uta-travel-agent/proto/destination";
 
-import "common.proto";
+import "agent/common.proto";
 
 // CreateAgentRequest is the request to create a new destination agent
 message CreateAgentRequest {

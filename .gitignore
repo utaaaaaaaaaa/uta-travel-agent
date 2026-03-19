@@ -71,5 +71,12 @@ memory/*.md.bak
 # Build artifacts
 *.tar.gz
 
+# Next.js
+.next/
+next-env.d.ts
+
+# Go binaries
+api-gateway
+
 # Test coverage
 coverage/

@@ -1,0 +1,41 @@
+{
+  "version": "1.0.0",
+  "updated_at": "2024-01-01T00:00:00Z",
+  "skills": [
+    {
+      "name": "rag-query",
+      "version": "1.0.0",
+      "description": "从知识库检索相关信息并生成回答",
+      "source": "local",
+      "tags": ["rag", "query", "knowledge"]
+    },
+    {
+      "name": "build-knowledge-base",
+      "version": "1.0.0",
+      "description": "构建结构化知识库",
+      "source": "local",
+      "tags": ["knowledge", "build", "curate"]
+    },
+    {
+      "name": "build-knowledge-index",
+      "version": "1.0.0",
+      "description": "构建向量检索索引",
+      "source": "local",
+      "tags": ["index", "vector", "embedding"]
+    },
+    {
+      "name": "itinerary-planner",
+      "version": "1.0.0",
+      "description": "生成个性化旅游行程",
+      "source": "local",
+      "tags": ["itinerary", "plan", "travel"]
+    },
+    {
+      "name": "estimate-budget",
+      "version": "1.0.0",
+      "description": "估算旅游预算",
+      "source": "local",
+      "tags": ["budget", "estimate", "cost"]
+    }
+  ]
+}

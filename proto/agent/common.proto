@@ -11,14 +11,17 @@ message Empty {}
 message Error {
     string code = 1;
     string message = 2;
+    map<string, string> details = 3;
 }
 
+// Location represents a geographic location
 message Location {
     double latitude = 1;
     double longitude = 2;
-    double accuracy = 3;
+    double accuracy = 3;      // Accuracy in meters
 }
 
+// AgentMetadata contains agent metadata
 message AgentMetadata {
     string id = 1;
     string user_id = 2;
@@ -28,8 +31,65 @@ message AgentMetadata {
     string theme = 6;
     repeated string languages = 7;
     repeated string tags = 8;
-    string status = 9;
+    string status = 9;           // creating, ready, archived, error
     int64 created_at = 10;
     int64 updated_at = 11;
     int32 document_count = 12;
+    string vector_collection_id = 13;
+    int32 usage_count = 14;
+    double rating = 15;
+    optional int64 last_used_at = 16;
+}
+
+// Pagination for list operations
+message PaginationRequest {
+    int32 page = 1;
+    int32 page_size = 2;
+}
+
+message PaginationResponse {
+    int32 page = 1;
+    int32 page_size = 2;
+    int32 total = 3;
+    int32 total_pages = 4;
+}
+
+// Document represents a document in the knowledge base
+message Document {
+    string id = 1;
+    string content = 2;
+    map<string, string> metadata = 3;
+    double score = 4;           // Relevance score for search results
+}
+
+// IndexRequest for indexing documents
+message IndexRequest {
+    string collection_id = 1;
+    repeated Document documents = 2;
+}
+
+message IndexResponse {
+    int32 indexed = 1;
+    repeated string document_ids = 2;
+}
+
+// SearchRequest for searching documents
+message SearchRequest {
+    string collection_id = 1;
+    string query = 2;
+    int32 limit = 3;
+    double min_score = 4;
+    map<string, string> filters = 5;
+}
+
+message SearchResponse {
+    repeated Document results = 1;
+    int32 total = 2;
+}
+
+// ServiceStatus for health checks
+message ServiceStatus {
+    string status = 1;          // healthy, unhealthy, degraded
+    string version = 2;
+    map<string, string> details = 3;
 }

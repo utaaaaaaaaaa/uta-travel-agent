@@ -1,7 +1,9 @@
 version: '3.8'
 
 services:
-  # PostgreSQL - Primary database for agent metadata
+  # ===================
+  # Storage Services
+  # ===================
   postgres:
     image: postgres:16-alpine
     container_name: uta-postgres
@@ -18,8 +20,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - uta-network
 
-  # Redis - Cache and session storage
   redis:
     image: redis:7-alpine
     container_name: uta-redis
@@ -32,8 +35,9 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - uta-network
 
-  # Qdrant - Vector database for RAG
   qdrant:
     image: qdrant/qdrant:latest
     container_name: uta-qdrant
@@ -47,8 +51,9 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - uta-network
 
-  # MinIO - Object storage for files and images
   minio:
     image: minio/minio:latest
     container_name: uta-minio
@@ -66,19 +71,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    networks:
+      - uta-network
 
-  # Orchestrator - Go service (development)
-  orchestrator:
+  # ===================
+  # API Gateway (Go)
+  # ===================
+  api-gateway:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.orchestrator
-    container_name: uta-orchestrator
+      dockerfile: infra/docker/api-gateway.Dockerfile
+    container_name: uta-api-gateway
     ports:
       - "8080:8080"
-      - "50051:50051"
     environment:
-      - PORT=8080
-      - GRPC_PORT=50051
+      - LLM_PROVIDER=grpc
+      - LLM_GRPC_ADDR=llm-gateway:50051
+      - EMBEDDING_GRPC_ADDR=embedding:50052
+      - VISION_GRPC_ADDR=vision:50053
       - POSTGRES_HOST=postgres
       - POSTGRES_PORT=5432
       - POSTGRES_USER=uta
@@ -93,79 +103,83 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      qdrant:
+      llm-gateway:
         condition: service_healthy
+    networks:
+      - uta-network
+    volumes:
+      - agent-data:/app/data
 
-  # Destination Agent - Python service (development)
-  destination-agent:
+  # ===================
+  # Python gRPC Services
+  # ===================
+  llm-gateway:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.destination-agent
-    container_name: uta-destination-agent
+      dockerfile: infra/docker/llm-gateway.Dockerfile
+    container_name: uta-llm-gateway
     ports:
-      - "8001:8001"
+      - "50051:50051"
     environment:
-      - PORT=8001
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - GRPC_HOST=orchestrator
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
       - GRPC_PORT=50051
-    depends_on:
-      - orchestrator
-      - qdrant
+    networks:
+      - uta-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 50051)); s.close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
-  # Guide Agent - Python service (development)
-  guide-agent:
+  embedding:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.guide-agent
-    container_name: uta-guide-agent
+      dockerfile: infra/docker/embedding.Dockerfile
+    container_name: uta-embedding
     ports:
-      - "8002:8002"
+      - "50052:50052"
     environment:
-      - PORT=8002
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - GRPC_HOST=orchestrator
-      - GRPC_PORT=50051
-    depends_on:
-      - orchestrator
-      - qdrant
+      - GRPC_PORT=50052
+    networks:
+      - uta-network
 
-  # Planner Agent - Python service (development)
-  planner-agent:
+  vision:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.planner-agent
-    container_name: uta-planner-agent
+      dockerfile: infra/docker/vision.Dockerfile
+    container_name: uta-vision
     ports:
-      - "8003:8003"
+      - "50053:50053"
     environment:
-      - PORT=8003
-      - QDRANT_HOST=qdrant
-      - QDRANT_PORT=6333
-      - GRPC_HOST=orchestrator
-      - GRPC_PORT=50051
-    depends_on:
-      - orchestrator
-      - qdrant
+      - GRPC_PORT=50053
+    networks:
+      - uta-network
 
-  # Frontend - Next.js (development)
+  # ===================
+  # Frontend (Next.js)
+  # ===================
   web:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.web
+      dockerfile: infra/docker/web.Dockerfile
     container_name: uta-web
     ports:
       - "3000:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8080
-      - NEXT_PUBLIC_WS_URL=ws://localhost:8080
+      - NEXT_PUBLIC_API_URL=http://api-gateway:8080
+      - NODE_ENV=production
     depends_on:
-      - orchestrator
+      - api-gateway
+    networks:
+      - uta-network
+
+networks:
+  uta-network:
+    driver: bridge
 
 volumes:
   postgres_data:
   redis_data:
   qdrant_data:
   minio_data:
+  agent-data:

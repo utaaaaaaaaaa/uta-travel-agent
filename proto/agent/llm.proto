@@ -1,0 +1,96 @@
+syntax = "proto3";
+
+package agent.llm;
+
+option go_package = "github.com/utaaa/uta-travel-agent/proto/llm";
+
+// ChatMessage represents a single message in a conversation
+message ChatMessage {
+    string role = 1;      // user, assistant, system
+    string content = 2;
+}
+
+// ChatRequest is the request for chat completion
+message ChatRequest {
+    repeated ChatMessage messages = 1;
+    optional string model = 2;
+    optional string system = 3;
+    optional int32 max_tokens = 4;
+    double temperature = 5;
+    bool stream = 6;
+}
+
+// ChatResponse is the response from chat completion
+message ChatResponse {
+    string content = 1;
+    string model = 2;
+    UsageInfo usage = 3;
+    string stop_reason = 4;
+}
+
+// UsageInfo contains token usage information
+message UsageInfo {
+    int32 input_tokens = 1;
+    int32 output_tokens = 2;
+}
+
+// StreamChunk represents a chunk of streamed response
+message StreamChunk {
+    string content = 1;
+    bool done = 2;
+}
+
+// RAGRequest is the request for RAG-enhanced query
+message RAGRequest {
+    string query = 1;
+    string context = 2;
+    optional string system_prompt = 3;
+    optional string model = 4;
+    double temperature = 5;
+}
+
+// AnalyzeImageRequest is the request for image analysis
+message AnalyzeImageRequest {
+    bytes image_data = 1;
+    string media_type = 2;    // image/jpeg, image/png, etc.
+    string prompt = 3;
+    optional string model = 4;
+}
+
+// AnalyzeImageResponse is the response from image analysis
+message AnalyzeImageResponse {
+    string description = 1;
+    string model = 2;
+    UsageInfo usage = 3;
+}
+
+// HealthCheckRequest is the request for health check
+message HealthCheckRequest {}
+
+// HealthCheckResponse is the response from health check
+message HealthCheckResponse {
+    string status = 1;
+    string model = 2;
+    bool api_key_configured = 3;
+}
+
+// LLMService provides LLM operations
+service LLMService {
+    // Complete generates a chat completion
+    rpc Complete(ChatRequest) returns (ChatResponse);
+
+    // Stream generates a streaming chat completion
+    rpc Stream(ChatRequest) returns (stream StreamChunk);
+
+    // RAGQuery executes a RAG-enhanced query
+    rpc RAGQuery(RAGRequest) returns (ChatResponse);
+
+    // RAGStream executes a streaming RAG-enhanced query
+    rpc RAGStream(RAGRequest) returns (stream StreamChunk);
+
+    // AnalyzeImage analyzes an image using vision capabilities
+    rpc AnalyzeImage(AnalyzeImageRequest) returns (AnalyzeImageResponse);
+
+    // HealthCheck checks the service health
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}

@@ -1,0 +1,113 @@
+# Planner Agent Template
+# 行程规划师 Agent，负责生成个性化旅游行程
+
+kind: AgentTemplate
+apiVersion: agent.uta/v1
+
+metadata:
+  name: planner
+  version: v1.0.0
+  description: |
+    Planner Agent 是专业的行程规划师。
+    根据用户的时间、预算、偏好，生成个性化的旅游行程。
+
+spec:
+  # Agent 角色定义
+  role: |
+    你是一个专业的旅游行程规划师。你的职责是根据用户的需求生成个性化的旅游行程。
+
+    规划原则：
+    1. 时间合理：考虑景点间交通时间，避免行程过于紧张
+    2. 路线优化：按地理位置安排景点，减少来回奔波
+    3. 张弛有度：平衡热门景点和休息时间
+    4. 灵活调整：保留一定弹性，允许用户中途调整
+    5. 预算控制：在用户预算范围内规划
+
+    需要考虑的因素：
+    - 用户可用的天数
+    - 每天的游玩时间（考虑体力）
+    - 用户兴趣偏好（文化/自然/美食/购物）
+    - 预算限制
+    - 季节和天气
+    - 特殊需求（无障碍、带小孩等）
+
+  # 能力声明
+  capabilities:
+    - plan_itinerary         # 规划行程
+    - estimate_time          # 估算时间
+    - estimate_budget        # 估算预算
+    - optimize_route         # 优化路线
+    - adjust_plan            # 调整计划
+
+  # 可用工具
+  tools:
+    mcp:
+      - name: maps
+        description: 地图服务，用于路线规划
+        required: true
+    skills:
+      - itinerary_planner    # 行程规划 Skill
+      - estimate_budget      # 预算估算 Skill
+      - rag_query            # 查询知识库
+    services:
+      - llm_gateway          # LLM 服务
+
+  # 决策配置
+  decision:
+    model: claude-sonnet-4-6
+    temperature: 0.5
+    max_iterations: 10
+    timeout: 120s
+
+  # 依赖
+  requires:
+    destination_agent: true  # 需要已创建的 Destination Agent
+    knowledge_base: true     # 需要知识库
+
+  # 输出格式
+  outputFormat:
+    type: structured
+    schema:
+      type: object
+      properties:
+        itinerary:
+          type: object
+          description: 行程安排
+          properties:
+            destination: { type: string }
+            days:
+              type: array
+              items:
+                $ref: "#/definitions/DayPlan"
+        summary:
+          type: object
+          properties:
+            total_days: { type: integer }
+            total_spots: { type: integer }
+            estimated_budget: { type: object }
+            highlights: { type: array, items: { type: string } }
+        tips:
+          type: array
+          items: { type: string }
+
+  definitions:
+    DayPlan:
+      type: object
+      properties:
+        day: { type: integer }
+        date: { type: string }
+        theme: { type: string }
+        activities:
+          type: array
+          items:
+            type: object
+            properties:
+              time: { type: string }
+              type: { type: string, enum: [attraction, meal, transport, rest] }
+              name: { type: string }
+              location: { type: object }
+              duration: { type: string }
+              description: { type: string }
+              estimated_cost: { type: number }
+              tips: { type: array, items: { type: string } }
+        daily_budget: { type: number }

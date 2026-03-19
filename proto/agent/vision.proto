@@ -1,0 +1,73 @@
+syntax = "proto3";
+
+package agent.vision;
+
+option go_package = "github.com/utaaa/uta-travel-agent/proto/vision";
+
+// AnalyzeRequest is the request for image analysis
+message AnalyzeRequest {
+    bytes image_data = 1;
+    string media_type = 2;    // image/jpeg, image/png, image/webp, image/gif
+    string prompt = 3;
+}
+
+// AnalyzeResponse is the response from image analysis
+message AnalyzeResponse {
+    string description = 1;
+    string model = 2;
+    UsageInfo usage = 3;
+}
+
+// UsageInfo contains token usage information
+message UsageInfo {
+    int32 input_tokens = 1;
+    int32 output_tokens = 2;
+}
+
+// LandmarkInfo contains information about a recognized landmark
+message LandmarkInfo {
+    string name = 1;
+    double confidence = 2;
+    string description = 3;
+    optional string category = 4;           // temple, museum, nature, etc.
+    optional string historical_period = 5;
+}
+
+// RecognizeLandmarkRequest is the request for landmark recognition
+message RecognizeLandmarkRequest {
+    bytes image_data = 1;
+    string media_type = 2;
+    optional string destination = 3;        // Hint for the destination
+    string language = 4;                    // zh, en
+}
+
+// RecognizeLandmarkResponse is the response from landmark recognition
+message RecognizeLandmarkResponse {
+    bool recognized = 1;
+    optional LandmarkInfo landmark = 2;
+    string raw_analysis = 3;
+    string model = 4;
+}
+
+// HealthCheckRequest is the request for health check
+message HealthCheckRequest {}
+
+// HealthCheckResponse is the response from health check
+message HealthCheckResponse {
+    string status = 1;
+    string model = 2;
+    bool api_key_configured = 3;
+    repeated string supported_formats = 4;
+}
+
+// VisionService provides vision analysis operations
+service VisionService {
+    // AnalyzeImage analyzes an image with a custom prompt
+    rpc AnalyzeImage(AnalyzeRequest) returns (AnalyzeResponse);
+
+    // RecognizeLandmark recognizes a landmark in an image
+    rpc RecognizeLandmark(RecognizeLandmarkRequest) returns (RecognizeLandmarkResponse);
+
+    // HealthCheck checks the service health
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}

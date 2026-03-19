@@ -27,7 +27,16 @@
       "Bash(source .venv/bin/activate)",
       "Bash(python test_rag_simple.py)",
       "Bash(git diff:*)",
-      "Bash(pytest tests/ -v)"
+      "Bash(pytest tests/ -v)",
+      "Bash(go build:*)",
+      "Bash(buf lint:*)",
+      "Bash(protoc --version)",
+      "Bash(npm --version)",
+      "Bash(npx @bufbuild/buf lint)",
+      "Bash(curl -s http://localhost:8080/health)",
+      "Bash(curl -s http://localhost:8080/api/v1/agent/status)",
+      "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
+      "Bash(curl -s http://localhost:3000/chat)"
     ]
   }
 }

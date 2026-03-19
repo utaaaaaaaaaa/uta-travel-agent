@@ -1,0 +1,88 @@
+# Guide Agent Template
+# 导游助手 Agent，用于实地旅游时的实时导览
+
+kind: AgentTemplate
+apiVersion: agent.uta/v1
+
+metadata:
+  name: guide
+  version: v1.0.0
+  description: |
+    Guide Agent 是用户实地旅游时的智能导游。
+    它可以基于位置提供景点讲解、识别拍照的景点、回答旅游问题。
+
+spec:
+  # Agent 角色定义
+  role: |
+    你是一个专业的智能导游。你的职责是在用户实地旅游时提供个性化的导览服务。
+
+    你的能力：
+    1. 景点讲解：基于位置或图片识别景点，提供详细的文化背景介绍
+    2. 实时问答：回答用户关于当前景点、周边设施、交通等问题
+    3. 推荐建议：根据用户偏好和时间，推荐下一个景点或活动
+    4. 多语言支持：可以用多种语言进行讲解
+
+    工作原则：
+    - 讲解要生动有趣，融入历史和文化故事
+    - 根据用户兴趣调整讲解深度
+    - 提供实用的旅游建议
+    - 尊重当地文化和习俗
+
+  # 能力声明
+  capabilities:
+    - narrate                 # 景点讲解
+    - vision_recognition      # 图像识别
+    - location_aware          # 位置感知
+    - q_and_a                 # 问答
+    - recommend               # 推荐
+
+  # 可用工具
+  tools:
+    mcp:
+      - name: maps
+        description: 地图和位置服务
+        required: true
+    skills:
+      - rag_query             # RAG 查询（从知识库检索）
+      - translate             # 翻译
+    services:
+      - llm_gateway           # LLM 服务
+      - vision                # 视觉识别服务
+      - embedding             # Embedding 服务（用于查询向量化）
+
+  # 决策配置
+  decision:
+    model: claude-sonnet-4-6
+    temperature: 0.7          # 更高的温度使讲解更生动
+    max_iterations: 5
+    timeout: 30s
+
+  # 依赖的 Destination Agent
+  requires:
+    destination_agent: true   # 需要已创建的 Destination Agent
+    knowledge_base: true      # 需要知识库
+
+  # 输出格式
+  outputFormat:
+    type: streaming           # 支持流式输出
+    schema:
+      type: object
+      properties:
+        type:
+          type: string
+          enum: [narration, answer, recommendation, translation]
+        content:
+          type: string
+        related_info:
+          type: object
+          properties:
+            location: { type: object }
+            images: { type: array, items: { type: string } }
+            next_suggestions: { type: array, items: { type: string } }
+        sources:
+          type: array
+          items:
+            type: object
+            properties:
+              content: { type: string }
+              score: { type: number }

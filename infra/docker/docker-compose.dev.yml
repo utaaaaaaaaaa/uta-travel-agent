@@ -1,10 +1,17 @@
-# MVP Development Environment
-# Quick start: docker-compose -f docker-compose.dev.yml up -d
-
 version: '3.8'
 
 services:
-  # Qdrant - Vector database (required)
+  # ===================
+  # Storage (Minimal)
+  # ===================
+  redis:
+    image: redis:7-alpine
+    container_name: uta-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - uta-network
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: uta-qdrant
@@ -13,33 +20,85 @@ services:
       - "6334:6334"
     volumes:
       - qdrant_data:/qdrant/storage
+    networks:
+      - uta-network
+
+  # ===================
+  # LLM Gateway (Python)
+  # ===================
+  llm-gateway:
+    build:
+      context: ../..
+      dockerfile: infra/docker/llm-gateway.Dockerfile
+    container_name: uta-llm-gateway
+    ports:
+      - "50051:50051"
+    environment:
+      - GRPC_PORT=50051
+      # Choose your provider: mock, anthropic, openai, glm, deepseek
+      - LLM_PROVIDER=${LLM_PROVIDER:-mock}
+      # API Keys (set the one you need)
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - GLM_API_KEY=${GLM_API_KEY:-}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY:-}
+    networks:
+      - uta-network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/health"]
+      test: ["CMD", "python", "-c", "import socket; s=socket.socket(); s.connect(('localhost', 50051)); s.close()"]
       interval: 10s
       timeout: 5s
       retries: 5
 
-  # Destination Agent - FastAPI service
-  destination-agent:
+  # ===================
+  # API Gateway (Go)
+  # ===================
+  api-gateway:
     build:
       context: ../..
-      dockerfile: infra/docker/Dockerfile.destination-agent
-    container_name: uta-destination-agent
+      dockerfile: infra/docker/api-gateway.Dockerfile
+    container_name: uta-api-gateway
     ports:
-      - "8001:8001"
+      - "8080:8080"
     environment:
-      - PORT=8001
+      - HTTP_PORT=8080
+      - LLM_PROVIDER=grpc
+      - LLM_GRPC_ADDR=llm-gateway:50051
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
       - QDRANT_HOST=qdrant
       - QDRANT_PORT=6333
-      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
     depends_on:
-      qdrant:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8001/health"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
+      - redis
+      - qdrant
+      - llm-gateway
+    networks:
+      - uta-network
+    volumes:
+      - agent-data:/app/data
+
+  # ===================
+  # Frontend
+  # ===================
+  web:
+    build:
+      context: ../..
+      dockerfile: infra/docker/web.Dockerfile
+    container_name: uta-web
+    ports:
+      - "3000:3000"
+    environment:
+      - NEXT_PUBLIC_API_URL=http://api-gateway:8080
+      - NODE_ENV=production
+    depends_on:
+      - api-gateway
+    networks:
+      - uta-network
+
+networks:
+  uta-network:
+    driver: bridge
 
 volumes:
   qdrant_data:
+  agent-data:

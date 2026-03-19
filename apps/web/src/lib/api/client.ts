@@ -1,8 +1,8 @@
 /**
- * API Client for Destination Agent Service
+ * API Client for UTA Travel Agent
  */
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
 
 export interface Agent {
   id: string;
@@ -12,15 +12,47 @@ export interface Agent {
   destination: string;
   status: 'creating' | 'ready' | 'failed';
   document_count: number;
-  chunk_count: number;
+  chunk_count?: number;
 }
 
 export interface CreateAgentRequest {
-  user_id: string;
   destination: string;
   theme?: string;
   languages?: string[];
   tags?: string[];
+}
+
+export interface ChatRequest {
+  message: string;
+  session_id?: string;
+}
+
+export interface ChatResponse {
+  response: string;
+  session_id: string;
+  timestamp: number;
+}
+
+export interface AgentStatus {
+  agent_id: string;
+  type: string;
+  state: string;
+  subagents: string[];
+  memory_size: number;
+}
+
+export interface CreateDestinationAgentRequest {
+  destination: string;
+  theme?: string;
+  languages?: string[];
+  tags?: string[];
+}
+
+export interface CreateDestinationAgentResponse {
+  agent_id: string;
+  destination: string;
+  status: string;
+  message: string;
 }
 
 export interface QueryRequest {
@@ -71,43 +103,20 @@ async function fetchApi<T>(
 export const api = {
   // Health check
   async health() {
-    return fetchApi<{ status: string }>('/health');
+    return fetchApi<{ status: string; timestamp: number; service: string }>('/health');
   },
 
-  // Agent CRUD
-  async createAgent(data: CreateAgentRequest): Promise<Agent> {
-    return fetchApi<Agent>('/agents', {
+  // Chat with MainAgent
+  async chat(data: ChatRequest): Promise<ChatResponse> {
+    return fetchApi<ChatResponse>('/api/v1/chat', {
       method: 'POST',
       body: JSON.stringify(data),
     });
   },
 
-  async getAgent(id: string): Promise<Agent> {
-    return fetchApi<Agent>(`/agents/${id}`);
-  },
-
-  async listAgents(userId: string): Promise<{ agents: Agent[] }> {
-    return fetchApi<{ agents: Agent[] }>(`/agents?user_id=${encodeURIComponent(userId)}`);
-  },
-
-  async deleteAgent(id: string): Promise<void> {
-    await fetchApi(`/agents/${id}`, { method: 'DELETE' });
-  },
-
-  // Query
-  async queryAgent(id: string, data: QueryRequest): Promise<QueryResponse> {
-    return fetchApi<QueryResponse>(`/agents/${id}/query`, {
-      method: 'POST',
-      body: JSON.stringify(data),
-    });
-  },
-
-  // Streaming query
-  async *queryAgentStream(
-    id: string,
-    data: QueryRequest
-  ): AsyncGenerator<string> {
-    const url = `${API_BASE_URL}/agents/${id}/query/stream`;
+  // Streaming chat
+  async *chatStream(data: ChatRequest): AsyncGenerator<string> {
+    const url = `${API_BASE_URL}/api/v1/chat/stream`;
     const response = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -136,8 +145,8 @@ export const api = {
         if (line.startsWith('data: ')) {
           const data = line.slice(6);
           if (data === '[DONE]') return;
-          if (data.startsWith('[ERROR]')) {
-            throw new Error(data.slice(8));
+          if (data.startsWith('{') && data.includes('error')) {
+            throw new Error(data);
           }
           yield data;
         }
@@ -145,9 +154,17 @@ export const api = {
     }
   },
 
-  // Stats
-  async getAgentStats(id: string) {
-    return fetchApi(`/agents/${id}/stats`);
+  // Get agent status
+  async getAgentStatus(): Promise<AgentStatus> {
+    return fetchApi<AgentStatus>('/api/v1/agent/status');
+  },
+
+  // Create destination agent
+  async createDestinationAgent(data: CreateDestinationAgentRequest): Promise<CreateDestinationAgentResponse> {
+    return fetchApi<CreateDestinationAgentResponse>('/api/v1/agent/create', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
   },
 };
 

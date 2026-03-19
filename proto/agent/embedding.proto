@@ -1,0 +1,78 @@
+syntax = "proto3";
+
+package agent.embedding;
+
+option go_package = "github.com/utaaa/uta-travel-agent/proto/embedding";
+
+// EmbedRequest is the request for creating embeddings
+message EmbedRequest {
+    repeated string texts = 1;
+    bool use_cache = 2;
+    optional string model_preset = 3;  // multilingual, english, quality, asian
+}
+
+// EmbedResponse is the response with embeddings
+message EmbedResponse {
+    repeated Embedding embeddings = 1;
+    string model = 2;
+    int32 dimension = 3;
+    int32 cached_count = 4;
+}
+
+// Embedding represents a single embedding vector
+message Embedding {
+    repeated float values = 1;
+}
+
+// BatchEmbedRequest is the request for batch embedding
+message BatchEmbedRequest {
+    repeated string texts = 1;
+    optional string model_preset = 2;
+}
+
+// ModelInfoRequest requests model information
+message ModelInfoRequest {}
+
+// ModelInfoResponse returns model information
+message ModelInfoResponse {
+    string model = 1;
+    int32 dimension = 2;
+    map<string, string> presets = 3;
+}
+
+// ClearCacheRequest requests cache clearing
+message ClearCacheRequest {}
+
+// ClearCacheResponse returns cache clear result
+message ClearCacheResponse {
+    int32 cleared = 1;
+}
+
+// HealthCheckRequest is the request for health check
+message HealthCheckRequest {}
+
+// HealthCheckResponse is the response from health check
+message HealthCheckResponse {
+    string status = 1;
+    string model = 2;
+    int32 dimension = 3;
+    int32 cache_size = 4;
+}
+
+// EmbeddingService provides embedding operations
+service EmbeddingService {
+    // Embed creates embeddings for texts
+    rpc Embed(EmbedRequest) returns (EmbedResponse);
+
+    // BatchEmbed creates embeddings for a large batch
+    rpc BatchEmbed(BatchEmbedRequest) returns (EmbedResponse);
+
+    // GetModelInfo returns model information
+    rpc GetModelInfo(ModelInfoRequest) returns (ModelInfoResponse);
+
+    // ClearCache clears the embedding cache
+    rpc ClearCache(ClearCacheRequest) returns (ClearCacheResponse);
+
+    // HealthCheck checks the service health
+    rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}

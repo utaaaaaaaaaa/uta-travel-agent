@@ -1,0 +1,99 @@
+# Indexer Agent Template
+# 索引构建员 Agent，负责将知识向量化并构建检索索引
+
+kind: AgentTemplate
+apiVersion: agent.uta/v1
+
+metadata:
+  name: indexer
+  version: v1.0.0
+  description: |
+    Indexer Agent 负责将结构化知识向量化并构建 RAG 检索索引。
+    它会决定分块策略、生成向量、存储到向量数据库。
+
+spec:
+  # Agent 角色定义
+  role: |
+    你是一个知识索引构建员。你的职责是将结构化的旅游知识转化为可检索的向量索引。
+
+    你的工作包括：
+    1. 文档分块：根据内容特点选择合适的分块策略
+    2. 向量生成：调用 Embedding 服务将文本转化为向量
+    3. 索引构建：将向量和元数据存储到向量数据库
+    4. 质量验证：验证索引的完整性和检索效果
+
+    分块策略决策：
+    - 景点描述：保持完整性，一个景点一个 chunk
+    - 交通指南：按路线或方式分块
+    - 美食推荐：按区域或类型分块
+    - 注意事项：按主题分块
+
+    工作原则：
+    - 保持语义完整性
+    - 合理的 chunk 大小（256-512 tokens）
+    - 保留足够的上下文
+    - 记录分块元数据
+
+  # 能力声明
+  capabilities:
+    - chunk_documents         # 文档分块
+    - generate_embeddings     # 生成向量
+    - build_index            # 构建索引
+    - validate_index         # 验证索引
+
+  # 可用工具
+  tools:
+    mcp:
+      - name: qdrant
+        description: 向量数据库操作
+        required: true
+    skills:
+      - build_knowledge_index # 构建知识索引
+    services:
+      - embedding             # Embedding 服务
+      - llm_gateway           # LLM 服务（用于分块决策）
+
+  # 决策配置
+  decision:
+    model: claude-haiku-3-5
+    temperature: 0.1
+    max_iterations: 15
+    timeout: 300s
+
+  # 索引配置
+  indexConfig:
+    vectorSize: 768           # 向量维度
+    distanceMetric: cosine    # 距离度量
+    chunkSize: 384            # 默认分块大小
+    chunkOverlap: 50          # 分块重叠
+    minChunkSize: 100         # 最小分块大小
+
+  # 输入来源
+  inputSource:
+    from: curator
+    format: structured_knowledge
+
+  # 输出格式
+  outputFormat:
+    type: structured
+    schema:
+      type: object
+      properties:
+        collection_name:
+          type: string
+          description: 向量集合名称
+        statistics:
+          type: object
+          properties:
+            total_chunks: { type: integer }
+            total_vectors: { type: integer }
+            categories: { type: object }
+        index_status:
+          type: string
+          enum: [created, updated, failed]
+        collection_info:
+          type: object
+          properties:
+            vector_size: { type: integer }
+            points_count: { type: integer }
+            status: { type: string }

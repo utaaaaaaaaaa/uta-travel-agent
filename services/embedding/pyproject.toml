@@ -1,0 +1,20 @@
+[project]
+name = "embedding-service"
+version = "0.1.0"
+description = "Embedding service for UTA Travel Agent"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.109.0",
+    "uvicorn[standard]>=0.27.0",
+    "sentence-transformers>=2.2.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "numpy>=1.24.0",
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "protobuf>=4.25.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
