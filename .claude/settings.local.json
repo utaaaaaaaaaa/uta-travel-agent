@@ -10,7 +10,22 @@
       "Bash(git remote:*)",
       "Bash(git add:*)",
       "Bash(git commit:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(docker run:*)",
+      "Bash(pip install:*)",
+      "Bash(pip3 --version)",
+      "Bash(python3 -m pip --version)",
+      "Bash(npm install:*)",
+      "Bash(go test:*)",
+      "Bash(npm run:*)",
+      "Bash(.venv/bin/pip install:*)",
+      "Bash(.venv/bin/python test_rag_simple.py)",
+      "Bash(python3:*)",
+      "Bash(gh run:*)",
+      "Bash(pip3 install:*)",
+      "Bash(sudo apt-get:*)",
+      "Bash(source .venv/bin/activate)",
+      "Bash(python test_rag_simple.py)"
     ]
   }
 }

@@ -4,9 +4,11 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Globe, ArrowRight, Check, Loader2 } from "lucide-react";
+import { Globe, ArrowRight, Check, Loader2, AlertCircle } from "lucide-react";
+import { useAgents } from "@/hooks/useAgents";
+import { Agent } from "@/lib/api/client";
 
 const themes = [
   { id: "cultural", label: "文化之旅", icon: "🏛️", description: "历史遗迹、博物馆、传统文化" },
@@ -23,37 +25,87 @@ const languages = [
 
 export default function CreateDestinationPage() {
   const router = useRouter();
+  const { createAgent } = useAgents();
   const [step, setStep] = useState(1);
   const [destination, setDestination] = useState("");
   const [selectedTheme, setSelectedTheme] = useState("cultural");
   const [selectedLanguages, setSelectedLanguages] = useState<string[]>(["zh"]);
   const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [createdAgent, setCreatedAgent] = useState<Agent | null>(null);
   const [progress, setProgress] = useState(0);
   const [currentTask, setCurrentTask] = useState("");
 
   const handleCreate = async () => {
     setIsCreating(true);
+    setError(null);
     setStep(2);
 
-    // Simulate creation process
-    const tasks = [
-      { text: "搜索目的地信息", progress: 20 },
-      { text: "提取文化背景", progress: 40 },
-      { text: "构建知识图谱", progress: 60 },
-      { text: "向量化存储", progress: 80 },
-      { text: "创建对话系统", progress: 100 },
-    ];
+    try {
+      // Create agent via API
+      const agent = await createAgent({
+        destination,
+        theme: selectedTheme,
+        languages: selectedLanguages,
+      });
 
-    for (const task of tasks) {
-      setCurrentTask(task.text);
-      setProgress(task.progress);
-      await new Promise((resolve) => setTimeout(resolve, 1500));
+      setCreatedAgent(agent);
+
+      // Poll for status updates
+      const pollInterval = setInterval(async () => {
+        try {
+          const response = await fetch(
+            `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/agents/${agent.id}`
+          );
+          const updatedAgent: Agent = await response.json();
+          setCreatedAgent(updatedAgent);
+
+          // Update progress based on status
+          if (updatedAgent.status === 'ready') {
+            clearInterval(pollInterval);
+            setProgress(100);
+            setCurrentTask("创建完成！");
+            setTimeout(() => {
+              router.push(`/destinations/${agent.id}`);
+            }, 1500);
+          } else if (updatedAgent.status === 'failed') {
+            clearInterval(pollInterval);
+            setError("创建失败，请重试");
+          } else {
+            // Update progress based on document count
+            if (updatedAgent.document_count > 0) {
+              setProgress(60);
+              setCurrentTask("构建知识图谱...");
+            }
+            if (updatedAgent.chunk_count > 0) {
+              setProgress(80);
+              setCurrentTask("向量化存储...");
+            }
+          }
+        } catch (e) {
+          console.error('Poll error:', e);
+        }
+      }, 2000);
+
+      // Initial progress
+      setProgress(10);
+      setCurrentTask("搜索目的地信息...");
+
+      // Simulate progress while waiting
+      const progressInterval = setInterval(() => {
+        setProgress((prev) => Math.min(prev + 5, 50));
+      }, 500);
+
+      // Cleanup on unmount
+      return () => {
+        clearInterval(pollInterval);
+        clearInterval(progressInterval);
+      };
+
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "创建失败");
+      setIsCreating(false);
     }
-
-    // Navigate to guide page
-    setTimeout(() => {
-      router.push("/destinations");
-    }, 1000);
   };
 
   const toggleLanguage = (code: string) => {
@@ -141,15 +193,32 @@ export default function CreateDestinationPage() {
               </div>
             </div>
 
+            {/* Error */}
+            {error && (
+              <div className="flex items-center gap-2 text-destructive">
+                <AlertCircle className="h-4 w-4" />
+                <span>{error}</span>
+              </div>
+            )}
+
             {/* Submit */}
             <Button
               size="lg"
               className="w-full"
-              disabled={!destination.trim() || selectedLanguages.length === 0}
+              disabled={!destination.trim() || selectedLanguages.length === 0 || isCreating}
               onClick={handleCreate}
             >
-              开始创建
-              <ArrowRight className="ml-2 h-4 w-4" />
+              {isCreating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  创建中...
+                </>
+              ) : (
+                <>
+                  开始创建
+                  <ArrowRight className="ml-2 h-4 w-4" />
+                </>
+              )}
             </Button>
           </div>
         )}
@@ -170,6 +239,11 @@ export default function CreateDestinationPage() {
               <p className="text-muted-foreground mt-2">
                 为你构建 {destination} 导游 Agent
               </p>
+              {createdAgent && (
+                <p className="text-sm text-muted-foreground mt-1">
+                  文档: {createdAgent.document_count} | 分块: {createdAgent.chunk_count}
+                </p>
+              )}
             </div>
 
             {/* Progress Bar */}
@@ -183,32 +257,29 @@ export default function CreateDestinationPage() {
               <p className="text-sm text-center text-muted-foreground">{progress}%</p>
             </div>
 
-            {/* Task List */}
-            <div className="space-y-3">
-              {[
-                { text: "搜索目的地信息", done: progress >= 20 },
-                { text: "提取文化背景", done: progress >= 40 },
-                { text: "构建知识图谱", done: progress >= 60 },
-                { text: "向量化存储", done: progress >= 80 },
-                { text: "创建对话系统", done: progress >= 100 },
-              ].map((task, index) => (
-                <div
-                  key={index}
-                  className={`flex items-center gap-3 p-3 rounded-lg ${
-                    task.done ? "bg-green-50" : currentTask === task.text ? "bg-primary/5" : ""
-                  }`}
-                >
-                  {task.done ? (
-                    <Check className="h-5 w-5 text-green-600" />
-                  ) : currentTask === task.text ? (
-                    <Loader2 className="h-5 w-5 text-primary animate-spin" />
-                  ) : (
-                    <div className="h-5 w-5 rounded-full border-2" />
-                  )}
-                  <span className={task.done ? "text-green-700" : ""}>{task.text}</span>
+            {/* Current Task */}
+            {currentTask && (
+              <div className="text-center text-muted-foreground">
+                {currentTask}
+              </div>
+            )}
+
+            {/* Error */}
+            {error && (
+              <div className="text-center">
+                <div className="flex items-center justify-center gap-2 text-destructive mb-4">
+                  <AlertCircle className="h-4 w-4" />
+                  <span>{error}</span>
                 </div>
-              ))}
-            </div>
+                <Button variant="outline" onClick={() => {
+                  setStep(1);
+                  setError(null);
+                  setIsCreating(false);
+                }}>
+                  重试
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </main>
