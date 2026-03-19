@@ -1,0 +1,92 @@
+syntax = "proto3";
+
+package agent.destination;
+
+option go_package = "github.com/utaaa/uta-travel-agent/proto/destination";
+
+import "common.proto";
+
+// CreateAgentRequest is the request to create a new destination agent
+message CreateAgentRequest {
+    string user_id = 1;
+    string destination = 2;
+    string theme = 3;
+    repeated string languages = 4;
+    repeated string tags = 5;
+}
+
+// CreateAgentResponse returns the created agent
+message CreateAgentResponse {
+    agent.common.AgentMetadata agent = 1;
+}
+
+// GetAgentRequest retrieves an agent by ID
+message GetAgentRequest {
+    string agent_id = 1;
+}
+
+// GetAgentResponse returns the requested agent
+message GetAgentResponse {
+    agent.common.AgentMetadata agent = 1;
+}
+
+// ListAgentsRequest lists agents for a user
+message ListAgentsRequest {
+    string user_id = 1;
+    int32 page = 2;
+    int32 page_size = 3;
+}
+
+// ListAgentsResponse returns a list of agents
+message ListAgentsResponse {
+    repeated agent.common.AgentMetadata agents = 1;
+    int32 total = 2;
+}
+
+// DeleteAgentRequest deletes an agent
+message DeleteAgentRequest {
+    string agent_id = 1;
+}
+
+// DeleteAgentResponse confirms deletion
+message DeleteAgentResponse {
+    bool success = 1;
+}
+
+// QueryRequest queries the agent's knowledge base
+message QueryRequest {
+    string agent_id = 1;
+    string query = 2;
+    int32 limit = 3;
+}
+
+// QueryResult represents a single search result
+message QueryResult {
+    string id = 1;
+    string content = 2;
+    double score = 3;
+    map<string, string> metadata = 4;
+}
+
+// QueryResponse returns search results
+message QueryResponse {
+    repeated QueryResult results = 1;
+}
+
+// DestinationAgentService provides destination agent operations
+service DestinationAgentService {
+    // Create creates a new destination agent
+    rpc Create(CreateAgentRequest) returns (CreateAgentResponse);
+
+    // Get retrieves an agent by ID
+    rpc Get(GetAgentRequest) returns (GetAgentResponse);
+
+    // List retrieves all agents for a user
+    rpc List(ListAgentsRequest) returns (ListAgentsResponse);
+
+    // Delete removes an agent
+    rpc Delete(DeleteAgentRequest) returns (DeleteAgentResponse);
+
+    // Query searches the agent's knowledge base
+    rpc Query(QueryRequest) returns (QueryResponse);
+}

@@ -1,0 +1,72 @@
+# 噪声、 无尾文件，操作系统生成的文件等
+*.DS_Store
+*.swp
+*.bak
+*.tmp
+*~
+
+# Dependencies
+node_modules/
+__pycache__/
+.pnpm-debug.log
+
+# Build outputs
+dist/
+build/
+*.egg-info/
+.eggs/
+*.egg
+
+# Go
+*.exe
+*.exe~
+*.test
+*.out
+vendor/
+bin/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.eggs/
+*.egg
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.dmypy.json
+.ruff_cache/
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Project specific
+# Claude memory
+memory/*.md.bak
+
+# Build artifacts
+*.tar.gz

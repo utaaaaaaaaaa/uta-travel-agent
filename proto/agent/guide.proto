@@ -1,0 +1,109 @@
+syntax = "proto3";
+
+package agent.guide;
+
+option go_package = "github.com/utaaa/uta-travel-agent/proto/guide";
+
+import "common.proto";
+
+// StartSessionRequest starts a new guide session
+message StartSessionRequest {
+    string agent_id = 1;
+    string user_id = 2;
+    agent.common.Location initial_location = 3;
+}
+
+// StartSessionResponse returns session info
+message StartSessionResponse {
+    string session_id = 1;
+    string status = 2;
+}
+
+// EndSessionRequest ends a guide session
+message EndSessionRequest {
+    string session_id = 1;
+}
+
+// EndSessionResponse confirms session end
+message EndSessionResponse {
+    bool success = 1;
+}
+
+// UpdateLocationRequest updates user location
+message UpdateLocationRequest {
+    string session_id = 1;
+    agent.common.Location location = 2;
+}
+
+// Landmark represents a recognized landmark
+message Landmark {
+    string id = 1;
+    string name = 2;
+    string description = 3;
+    agent.common.Location location = 4;
+    double confidence = 5;
+}
+
+// UpdateLocationResponse returns nearby landmarks
+message UpdateLocationResponse {
+    repeated Landmark landmarks = 1;
+}
+
+// RecognizeImageRequest sends an image for recognition
+message RecognizeImageRequest {
+    string session_id = 1;
+    bytes image_data = 2;
+    string content_type = 3;
+}
+
+// RecognizeImageResponse returns recognized landmark
+message RecognizeImageResponse {
+    Landmark landmark = 1;
+}
+
+// AskQuestionRequest asks a question during the tour
+message AskQuestionRequest {
+    string session_id = 1;
+    string question = 2;
+    string context = 3;
+}
+
+// AskQuestionResponse returns the answer
+message AskQuestionResponse {
+    string answer = 1;
+}
+
+// GenerateNarrationRequest requests narration for a landmark
+message GenerateNarrationRequest {
+    string session_id = 1;
+    string landmark_id = 2;
+    string language = 3;
+}
+
+// GenerateNarrationResponse returns the narration
+message GenerateNarrationResponse {
+    string title = 1;
+    string content = 2;
+    string language = 3;
+}
+
+// GuideService provides real-time guide operations
+service GuideService {
+    // StartSession starts a new guide session
+    rpc StartSession(StartSessionRequest) returns (StartSessionResponse);
+
+    // EndSession ends a guide session
+    rpc EndSession(EndSessionRequest) returns (EndSessionResponse);
+
+    // UpdateLocation updates user location and returns nearby landmarks
+    rpc UpdateLocation(UpdateLocationRequest) returns (UpdateLocationResponse);
+
+    // RecognizeImage recognizes a landmark from an image
+    rpc RecognizeImage(RecognizeImageRequest) returns (RecognizeImageResponse);
+
+    // AskQuestion answers a user question
+    rpc AskQuestion(AskQuestionRequest) returns (AskQuestionResponse);
+
+    // GenerateNarration generates narration for a landmark
+    rpc GenerateNarration(GenerateNarrationRequest) returns (GenerateNarrationResponse);
+}

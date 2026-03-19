@@ -1,0 +1,31 @@
+# Build stage for Go orchestrator
+FROM golang:1.22-alpine AS builder
+
+WORKDIR /app
+
+# Copy go mod files
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy source code
+COPY cmd ./cmd
+COPY internal ./internal
+
+# Build the binary
+RUN CGO_ENABLED=0 GOOS=linux go build -o /orchestrator ./cmd/orchestrator
+
+# Final stage
+FROM alpine:latest
+
+RUN apk --no-cache add ca-certificates tzdata
+
+WORKDIR /app
+
+# Copy binary from builder
+COPY --from=builder /orchestrator /app/orchestrator
+
+# Expose ports
+EXPOSE 8080 50051
+
+# Run the binary
+CMD ["/app/orchestrator"]
