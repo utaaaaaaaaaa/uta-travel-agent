@@ -1,0 +1,24 @@
+# UTA Embedding Service - Python Dependencies
+
+# gRPC
+grpcio>=1.60.0
+grpcio-tools>=1.60.0
+protobuf>=4.25.0
+
+# Embedding
+sentence-transformers>=2.2.0
+torch>=2.0.0
+
+# Utilities
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+
+# Cache
+cachetools>=5.3.0
+
+# Async
+uvloop>=0.19.0
+
+# Testing
+pytest>=7.4.0
+pytest-asyncio>=0.21.0

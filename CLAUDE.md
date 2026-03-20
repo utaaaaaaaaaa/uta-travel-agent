@@ -4,6 +4,9 @@
 
 UTA (Universal Travel Agent) 是一个基于 Multi-Agent 架构的智能旅游助手系统。核心理念是"Vibecoding"——让技术为体验服务，通过 AI Agent 为用户提供沉浸式的旅游文化体验。
 
+### 纲要
+1. **每个 Phase 完成后必须进行测试验证，防止错误积累！**
+
 ### 核心功能
 1. **目的地研究 Agent**: 自动搜索、整理旅游目的地信息，构建 RAG 知识库
 2. **智能导游 Agent**: 实地旅游时，基于位置/图片识别景点，提供文化背景讲解
@@ -422,6 +425,147 @@ feat/fix/docs/test/refactor/chore(scope): message
 8. **Test-Driven**: 同步测试
 9. **Documentation-First**: 核心功能配套文档
 
+## ⚠️ CRITICAL: Agent 范式要求 (必须遵守)
+
+**这是核心架构原则，所有 Agent 实现必须遵循！**
+
+### Subagent 就是 Agent
+
+Subagent 不是简单的工具执行器，而是**完整的 Agent**，必须具备：
+
+| 组件 | 说明 | 重要性 |
+|------|------|--------|
+| **Memory** | 独立的记忆系统，存储 thoughts、observations、actions、results | 必需 |
+| **Context** | 独立的上下文窗口，维护对话历史和任务状态 | 必需 |
+| **Prompt** | 独立的系统提示词，定义角色、职责、行为规范 | 必需 |
+| **Action Flow** | 独立的行动流程，ReAct/Plan-Execute 等模式 | 必需 |
+| **LLM Brain** | 独立的 LLM 实例，作为决策大脑 | 必需 |
+
+### Agent 架构图
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      Agent (完整架构)                        │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                    LLM Brain                        │    │
+│  │   • 接收观察 → 思考 → 决策下一步行动                  │    │
+│  │   • 自主判断任务是否完成                             │    │
+│  │   • 可以"自由探索"寻找目标                           │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                           │                                  │
+│                           ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                   System Prompt                      │    │
+│  │   • 角色定义 (你是谁)                                │    │
+│  │   • 职责边界 (你要做什么)                            │    │
+│  │   • 行为规范 (你怎么做)                              │    │
+│  │   • 输出格式 (你输出什么)                            │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                           │                                  │
+│                           ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                     Memory                           │    │
+│  │   ┌─────────────────────────────────────────────┐   │    │
+│  │   │ Thoughts  │ "我需要搜索京都景点..."          │   │    │
+│  │   │ Actions   │ brave_search("京都景点")         │   │    │
+│  │   │ Observations │ 搜索返回 15 条结果           │   │    │
+│  │   │ Results   │ 成功收集景点信息                 │   │    │
+│  │   └─────────────────────────────────────────────┘   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                           │                                  │
+│                           ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                  Action Flow (ReAct)                │    │
+│  │                                                      │    │
+│  │   ┌──────────┐    ┌──────────┐    ┌──────────┐      │    │
+│  │   │  Think   │ ─► │   Act    │ ─► │ Observe  │ ─┐   │    │
+│  │   │  思考    │    │   行动   │    │   观察   │   │   │    │
+│  │   └──────────┘    └──────────┘    └──────────┘   │   │    │
+│  │         ▲                                         │   │    │
+│  │         └─────────────────────────────────────────┘   │    │
+│  │                                                      │    │
+│  │   循环直到: 任务完成 / 达到最大步数 / 遇到错误        │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                           │                                  │
+│                           ▼                                  │
+│  ┌─────────────────────────────────────────────────────┐    │
+│  │                    Tools                             │    │
+│  │   brave_search │ web_reader │ llm_summarize │ ...   │    │
+│  └─────────────────────────────────────────────────────┘    │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Agent 自主探索能力
+
+每个 Agent 应该能够**自主探索**，而不是按固定流程执行：
+
+```go
+// ❌ 错误：硬编码的工作流
+func (a *ResearcherAgent) Run(goal string) {
+    a.Search(goal)      // 固定步骤 1
+    a.ReadURLs()        // 固定步骤 2
+    a.Extract()         // 固定步骤 3
+}
+
+// ✅ 正确：LLM 驱动的自主探索
+func (a *ResearcherAgent) Run(goal string) {
+    for !a.IsComplete() {
+        // LLM 决定下一步做什么
+        thought := a.LLM.Think(a.Memory, goal)
+
+        // LLM 选择工具和参数
+        action := a.LLM.DecideAction(thought, a.AvailableTools)
+
+        // 执行工具
+        observation := a.ExecuteTool(action)
+
+        // 记录到 Memory
+        a.Memory.AddThought(thought)
+        a.Memory.AddAction(action)
+        a.Memory.AddObservation(observation)
+
+        // LLM 可以"发现新方向"并自主探索
+        if thought.SuggestsNewDirection {
+            a.Explore(thought.NewDirection)  // 自主探索！
+        }
+    }
+}
+```
+
+### 探索追踪 (Exploration Tracking)
+
+Agent 的探索过程应该被追踪和可视化：
+
+```go
+type ExplorationStep struct {
+    AgentID      string    `json:"agent_id"`
+    Timestamp    time.Time `json:"timestamp"`
+    Direction    string    `json:"direction"`     // 探索方向
+    Action       string    `json:"action"`        // 执行的动作
+    Result       string    `json:"result"`        // 结果摘要
+    TokensUsed   int       `json:"tokens_used"`   // Token 消耗
+    Duration     int64     `json:"duration"`      // 耗时(ms)
+}
+
+// 前端展示：雷达图 + 时间线
+```
+
+### 当前实现状态
+
+| Agent | Memory | Context | Prompt | Action Flow | LLM Brain | 状态 |
+|-------|--------|---------|--------|-------------|-----------|------|
+| MainAgent | ✅ | ✅ | ✅ | ✅ | ✅ | 完整 |
+| Researcher | ✅ | ❌ | ❌ | ❌ (硬编码) | ❌ | 需重构 |
+| Curator | ✅ | ❌ | ❌ | ❌ (硬编码) | ❌ | 需重构 |
+| Indexer | ✅ | ❌ | ❌ | ❌ (硬编码) | ❌ | 需重构 |
+| Guide | ✅ | ❌ | ❌ | ❌ (硬编码) | ❌ | 需重构 |
+| Planner | ✅ | ❌ | ❌ | ❌ (硬编码) | ❌ | 需重构 |
+
+**所有 Subagent 都需要重构为真正的 Agent！**
+
 ## Notes
 
 - 渐进式开发，优先核心 Agent 功能
@@ -431,77 +575,57 @@ feat/fix/docs/test/refactor/chore(scope): message
 - 优先使用 Claude API
 - 同步编写测试和文档
 
-## v0.3.0-alpha 开发计划
+## 当前实现状态 (v0.4.0-alpha)
 
-**目标**: 实现完整的目的地 Agent 创建流程 (MainAgent 编排 Subagent)
+### 已完成功能 ✅
 
-### Phase 1: 基础设施 (Week 1)
-
-1. **Qdrant 向量数据库集成**
-   - Docker Compose 添加 Qdrant 服务
-   - Go Qdrant 客户端封装
-   - Collection 创建/管理 API
-
-2. **Embedding gRPC 服务**
-   - Python Embedding 服务完善
-   - 支持文本 Embedding API
-   - 批量 Embedding 优化
-
-### Phase 2: Subagent 实现 (Week 2)
-
-3. **Researcher Agent**
-   - 网页搜索工具 (SerpAPI/自定义爬虫)
-   - 内容提取和清洗
-   - 输出结构化文档
-
-4. **Curator Agent**
-   - 文档质量评估
-   - 信息去重和整合
-   - 生成知识摘要
-
-5. **Indexer Agent**
-   - 文本分块策略
-   - 调用 Embedding 服务
-   - 写入 Qdrant 索引
-
-### Phase 3: MainAgent 编排 (Week 3)
-
-6. **任务编排引擎**
-   - Subagent 注册和发现
-   - 任务链执行
-   - 错误处理和重试
-
-7. **进度反馈系统**
-   - SSE 进度推送
-   - 前端进度展示
-   - 创建状态持久化
-
-### Phase 4: 前端创建流程 (Week 4)
-
-8. **目的地创建向导**
-   - Step 1: 输入目的地信息
-   - Step 2: 实时进度展示
-   - Step 3: 创建完成/预览
-
-9. **Agent 管理页面**
-   - Agent 列表/详情
-   - 删除/更新操作
-   - 快速启动导游模式
-
-### 技术依赖
-
-| 组件 | 用途 | 状态 |
+| 模块 | 功能 | 状态 |
 |------|------|------|
-| Qdrant | 向量存储 | 待集成 |
-| Embedding Service | 文本向量化 | 待完善 |
-| SerpAPI / 爬虫 | 网页搜索 | 待实现 |
-| PostgreSQL | Agent 元数据 | 待集成 |
-| Redis | 任务状态缓存 | 待集成 |
+| **LLMAgent** | ReAct 循环 (Think→Act→Observe) | ✅ 完成 |
+| **LLMAgent** | Memory 系统 | ✅ 完成 |
+| **LLMAgent** | Tool 执行框架 | ✅ 完成 |
+| **MainAgent** | 任务编排 | ✅ 完成 |
+| **Registry** | Agent 注册和持久化 | ✅ 完成 |
+| **Repository** | PostgreSQL Agent 存储 | ✅ 完成 |
+| **Embedding** | gRPC Python 服务 | ✅ 完成 |
+| **Qdrant** | 向量数据库集成 | ✅ 完成 |
+| **Frontend** | 目的地创建页面 | ✅ 完成 |
+| **Frontend** | 导游页面骨架 | ✅ 完成 |
+| **Frontend** | 任务进度页面 | ✅ 完成 |
+| **Docker** | docker-compose 全栈部署 | ✅ 完成 |
 
-### 验收标准
+### 待完成功能 🚧
 
-- [ ] 用户可以输入目的地名称创建 Agent
-- [ ] 创建过程有实时进度反馈
-- [ ] 创建完成后可以与 Agent 对话
-- [ ] Agent 回答基于 RAG 检索的知识
-- [ ] Agent 数据持久化到 PostgreSQL
+| 模块 | 功能 | 优先级 |
+|------|------|--------|
+| **RAG** | 向量检索集成到 Guide Agent | 高 |
+| **SSE** | 流式聊天 API | 高 |
+| **搜索工具** | Web Search 工具实现 | 中 |
+| **Subagent** | 使用 LLMAgent 替换硬编码逻辑 | 中 |
+| **前端** | 导游页面完整实现 | 中 |
+| **Redis** | 会话缓存集成 | 低 |
+
+### v0.5.0-alpha 规划
+
+**目标**: 完善导游功能和多语言支持
+
+1. **实时导游增强**
+   - 位置服务集成
+   - 图片识别景点
+   - 离线模式支持
+
+2. **行程规划 Agent**
+   - 时间优化算法
+   - 预算估算
+   - 路线规划
+
+3. **多语言支持**
+   - 语言检测
+   - 实时翻译
+   - 多语言知识库
+
+### ⚠️ 开发规范
+
+**每个功能完成后必须进行测试验证，防止错误积累！**
+
+```

@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { api, CreateDestinationAgentResponse } from '@/lib/api/client';
+import { api, CreateAgentResponse } from '@/lib/api/client';
 
 export interface CreationStep {
   id: string;
@@ -146,16 +146,24 @@ export function useAgentCreation() {
   const startPolling = useCallback((agentId: string) => {
     pollIntervalRef.current = setInterval(async () => {
       try {
-        const status = await api.getAgentStatus();
+        const agent = await api.getAgent(agentId);
 
-        // Update steps based on status
-        // This is simplified - real implementation would parse agent state
-        if (status.state === 'completed') {
+        // Update steps based on agent status
+        if (agent.status === 'ready') {
           setState(prev => ({
             ...prev,
             status: 'completed',
             progress: 100,
             steps: prev.steps.map(s => ({ ...s, status: 'completed' as const })),
+          }));
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+          }
+        } else if (agent.status === 'error') {
+          setState(prev => ({
+            ...prev,
+            status: 'error',
+            error: 'Agent creation failed',
           }));
           if (pollIntervalRef.current) {
             clearInterval(pollIntervalRef.current);
@@ -187,7 +195,7 @@ export function useAgentCreation() {
 
     try {
       // Call API to create agent
-      const response: CreateDestinationAgentResponse = await api.createDestinationAgent(data);
+      const response: CreateAgentResponse = await api.createAgent(data);
 
       setState(prev => ({ ...prev, agentId: response.agent_id }));
 

@@ -3,7 +3,7 @@ package clients
 import (
 	"context"
 
-	pb "github.com/utaaa/uta-travel-agent/internal/gen/go/agent"
+	pb "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/llm"
 	"google.golang.org/grpc"
 )
 
@@ -78,8 +78,8 @@ func (c *LLMClient) Complete(ctx context.Context, req ChatRequest) (*ChatRespons
 	return &ChatResponse{
 		Content:      resp.Content,
 		Model:        resp.Model,
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+		InputTokens:  resp.Usage.GetInputTokens(),
+		OutputTokens: resp.Usage.GetOutputTokens(),
 		StopReason:   resp.StopReason,
 	}, nil
 }
@@ -116,8 +116,8 @@ func (c *LLMClient) RAGQuery(ctx context.Context, req RAGRequest) (*ChatResponse
 	return &ChatResponse{
 		Content:      resp.Content,
 		Model:        resp.Model,
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+		InputTokens:  resp.Usage.GetInputTokens(),
+		OutputTokens: resp.Usage.GetOutputTokens(),
 		StopReason:   resp.StopReason,
 	}, nil
 }
@@ -158,8 +158,8 @@ func (c *LLMClient) AnalyzeImage(ctx context.Context, req AnalyzeImageRequest) (
 	return &AnalyzeImageResponse{
 		Description:  resp.Description,
 		Model:        resp.Model,
-		InputTokens:  resp.Usage.InputTokens,
-		OutputTokens: resp.Usage.OutputTokens,
+		InputTokens:  resp.Usage.GetInputTokens(),
+		OutputTokens: resp.Usage.GetOutputTokens(),
 	}, nil
 }
 

@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"strings"
+	"time"
 )
 
-// ToolType defines the type of tool
+// Tool types
 type ToolType string
 
 const (
@@ -23,71 +25,37 @@ type Tool struct {
 	Required    bool           `json:"required,omitempty"`
 }
 
-// ToolResult represents the result of a tool execution
-type ToolResult struct {
-	Success bool        `json:"success"`
-	Data    any         `json:"data,omitempty"`
-	Error   string      `json:"error,omitempty"`
-}
-
 // ToolExecutor defines how a tool is executed
 type ToolExecutor interface {
 	Execute(ctx context.Context, params map[string]any) (*ToolResult, error)
 }
 
-// MCPClient interface for MCP tool communication
-type MCPClient interface {
-	Call(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error)
-	ListTools(ctx context.Context) ([]Tool, error)
+// ToolResult represents the result of a tool execution
+type ToolResult struct {
+	Success bool           `json:"success"`
+	Data    any            `json:"data,omitempty"`
+	Error   string         `json:"error,omitempty"`
 }
 
-// SkillExecutor handles skill execution based on SKILL.md definitions
-type SkillExecutor interface {
-	Execute(ctx context.Context, skillName string, params map[string]any) (*ToolResult, error)
-	LoadSkill(skillPath string) error
-	ListSkills() ([]Tool, error)
-}
-
-// ServiceClient interface for calling Python services
-type ServiceClient interface {
-	Call(ctx context.Context, serviceName string, method string, params map[string]any) (*ToolResult, error)
-}
-
-// ToolRegistry manages all available tools (MCP, Skills, Services)
+// ToolRegistry manages all available tools
 type ToolRegistry interface {
-	// Register adds a tool to the registry
 	Register(tool Tool, executor ToolExecutor) error
-
-	// Get retrieves a tool by name
 	Get(toolName string) (Tool, bool)
-
-	// Execute runs a tool with the given parameters
 	Execute(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error)
-
-	// ListTools returns all registered tools
 	ListTools() []Tool
-
-	// ListByType returns tools of a specific type
-	ListByType(toolType ToolType) []Tool
 }
 
-// DefaultToolRegistry is the default implementation of ToolRegistry
+// DefaultToolRegistry is the default implementation
 type DefaultToolRegistry struct {
 	tools     map[string]Tool
 	executors map[string]ToolExecutor
-	mcpClient MCPClient
-	skillExec SkillExecutor
-	svcClient ServiceClient
 }
 
 // NewToolRegistry creates a new tool registry
-func NewToolRegistry(mcpClient MCPClient, skillExec SkillExecutor, svcClient ServiceClient) *DefaultToolRegistry {
+func NewToolRegistry() *DefaultToolRegistry {
 	return &DefaultToolRegistry{
 		tools:     make(map[string]Tool),
 		executors: make(map[string]ToolExecutor),
-		mcpClient: mcpClient,
-		skillExec: skillExec,
-		svcClient: svcClient,
 	}
 }
 
@@ -107,41 +75,13 @@ func (r *DefaultToolRegistry) Get(toolName string) (Tool, bool) {
 	return tool, exists
 }
 
-// Execute runs a tool with the given parameters
+// Execute runs a tool with given parameters
 func (r *DefaultToolRegistry) Execute(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error) {
-	tool, exists := r.tools[toolName]
+	executor, exists := r.executors[toolName]
 	if !exists {
 		return nil, fmt.Errorf("tool %s not found", toolName)
 	}
-
-	// If there's a direct executor, use it
-	if exec, ok := r.executors[toolName]; ok {
-		return exec.Execute(ctx, params)
-	}
-
-	// Otherwise, route based on tool type
-	switch tool.Type {
-	case ToolTypeMCP:
-		if r.mcpClient == nil {
-			return nil, fmt.Errorf("MCP client not configured")
-		}
-		return r.mcpClient.Call(ctx, toolName, params)
-
-	case ToolTypeSkill:
-		if r.skillExec == nil {
-			return nil, fmt.Errorf("skill executor not configured")
-		}
-		return r.skillExec.Execute(ctx, toolName, params)
-
-	case ToolTypeService:
-		if r.svcClient == nil {
-			return nil, fmt.Errorf("service client not configured")
-		}
-		return r.svcClient.Call(ctx, toolName, "execute", params)
-
-	default:
-		return nil, fmt.Errorf("unknown tool type: %s", tool.Type)
-	}
+	return executor.Execute(ctx, params)
 }
 
 // ListTools returns all registered tools
@@ -153,50 +93,332 @@ func (r *DefaultToolRegistry) ListTools() []Tool {
 	return tools
 }
 
-// ListByType returns tools of a specific type
-func (r *DefaultToolRegistry) ListByType(toolType ToolType) []Tool {
-	var tools []Tool
-	for _, tool := range r.tools {
-		if tool.Type == toolType {
-			tools = append(tools, tool)
-		}
-	}
-	return tools
+// --- MCP Tools ---
+
+// BraveSearchTool performs web search
+type BraveSearchTool struct {
+	apiKey string
 }
 
-// LoadFromTemplate loads tools from an agent template
-func (r *DefaultToolRegistry) LoadFromTemplate(template *AgentTemplate) error {
-	// Load MCP tools
-	for _, ref := range template.Spec.Tools.MCP {
-		tool := Tool{
-			Name:        ref.Name,
-			Type:        ToolTypeMCP,
-			Description: ref.Description,
-			Required:    ref.Required,
-		}
-		// MCP tools don't have local executors, they use the mcpClient
-		r.tools[tool.Name] = tool
+// NewBraveSearchTool creates a new brave search tool
+func NewBraveSearchTool(apiKey string) *BraveSearchTool {
+	return &BraveSearchTool{apiKey: apiKey}
+}
+
+// Execute performs a brave search
+func (t *BraveSearchTool) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	query, ok := params["query"].(string)
+	if !ok {
+		return nil, fmt.Errorf("query parameter required")
 	}
 
-	// Load Skills
-	for _, ref := range template.Spec.Tools.Skills {
-		tool := Tool{
-			Name:        ref.Name,
-			Type:        ToolTypeSkill,
-			Description: ref.Description,
-			Required:    ref.Required,
-		}
-		r.tools[tool.Name] = tool
+	// TODO: Implement actual Brave Search API call
+	// For now, return mock results
+	return &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"query":   query,
+			"results": []any{
+				map[string]any{
+					"title": "京都旅游攻略",
+					"url":   "https://example.com/kyoto",
+					"snippet": "京都最佳旅游时间、交通指南",
+				},
+			},
+		},
+	}, nil
+}
+
+// WebReaderTool reads web content
+type WebReaderTool struct {
+	mcpClient MCPClient
+}
+
+// MCPClient interface for MCP communication
+type MCPClient interface {
+	Call(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error)
+}
+
+// NewWebReaderTool creates a new web reader tool
+func NewWebReaderTool(client MCPClient) *WebReaderTool {
+	return &WebReaderTool{mcpClient: client}
+}
+
+// Execute reads web content
+func (t *WebReaderTool) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	url, ok := params["url"].(string)
+	if !ok {
+		return nil, fmt.Errorf("url parameter required")
 	}
 
-	// Load Services
-	for _, svcName := range template.Spec.Tools.Services {
-		tool := Tool{
-			Name: svcName,
-			Type: ToolTypeService,
-		}
-		r.tools[tool.Name] = tool
+	// TODO: Implement actual MCP call
+	return &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"url":     url,
+			"content": "京都，日本的文化古都，拥有众多世界文化遗产...",
+			"size":    1024,
+		},
+	}, nil
+}
+
+// --- Skill Tools ---
+
+// LLMSummarizeTool summarizes content using LLM
+type LLMSummarizeTool struct {
+	llmProvider LLMProvider
+}
+
+// LLMProvider interface for LLM calls
+type LLMProvider interface {
+	Complete(ctx context.Context, prompt string, messages []LLMMessage, opts ...LLMOption) (*LLMResponse, error)
+}
+
+// LLMMessage represents a chat message
+type LLMMessage struct {
+	Role    string
+	Content string
+}
+
+// LLMResponse represents LLM response
+type LLMResponse struct {
+	Content      string
+	TokensUsed   int
+}
+
+// LLMOption is a functional option for LLM calls
+type LLMOption func(*LLMOptions)
+
+// LLMOptions holds LLM options
+type LLMOptions struct {
+	Temperature float64
+	MaxTokens   int
+}
+
+// NewLLMSummarizeTool creates a new LLM summarize tool
+func NewLLMSummarizeTool(provider LLMProvider) *LLMSummarizeTool {
+	return &LLMSummarizeTool{llmProvider: provider}
+}
+
+// Execute summarizes content
+func (t *LLMSummarizeTool) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	content, ok := params["content"].(string)
+	if !ok {
+		return nil, fmt.Errorf("content parameter required")
 	}
 
-	return nil
+	// TODO: Implement actual LLM call
+	return &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"summary": "京都旅游攻略摘要...",
+			"original_length": len(content),
+		},
+	}, nil
+}
+
+// BuildKnowledgeBaseTool builds knowledge base from documents
+type BuildKnowledgeBaseTool struct {
+	llmProvider LLMProvider
+}
+
+// NewBuildKnowledgeBaseTool creates a new build knowledge base tool
+func NewBuildKnowledgeBaseTool(provider LLMProvider) *BuildKnowledgeBaseTool {
+	return &BuildKnowledgeBaseTool{llmProvider: provider}
+}
+
+// Execute builds knowledge base
+func (t *BuildKnowledgeBaseTool) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	documents, ok := params["documents"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("documents parameter required")
+	}
+
+	// TODO: Implement knowledge base building
+	return &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"knowledge_base": map[string]any{
+				"categories": []string{"景点", "美食", "文化"},
+				"total_items": len(documents),
+			},
+		},
+	}, nil
+}
+
+// BuildKnowledgeIndexTool builds vector index from documents
+type BuildKnowledgeIndexTool struct {
+	embeddingClient EmbeddingClient
+	qdrantClient   QdrantClient
+	collectionID   string
+}
+
+// EmbeddingClient interface for embedding service
+type EmbeddingClient interface {
+	Embed(ctx context.Context, texts []string) ([][]float32, error)
+	BatchEmbed(ctx context.Context, texts []string) ([][]float32, error)
+}
+
+// QdrantClient interface for Qdrant operations
+type QdrantClient interface {
+	CreateCollection(ctx context.Context, name string, vectorSize uint64) error
+	Upsert(ctx context.Context, collection string, points []QdrantPoint) error
+	Search(ctx context.Context, collection string, vector []float32, limit int) ([]QdrantSearchResult, error)
+}
+
+// QdrantPoint represents a point to store
+type QdrantPoint struct {
+	ID      string
+	Vector  []float32
+	Payload map[string]any
+}
+
+// QdrantSearchResult represents search result
+type QdrantSearchResult struct {
+	ID      string
+	Score   float32
+	Payload map[string]any
+}
+
+// NewBuildKnowledgeIndexTool creates a new build knowledge index tool
+func NewBuildKnowledgeIndexTool(embeddingClient EmbeddingClient, qdrantClient QdrantClient, collectionID string) *BuildKnowledgeIndexTool {
+	return &BuildKnowledgeIndexTool{
+		embeddingClient: embeddingClient,
+		qdrantClient:   qdrantClient,
+		collectionID:   collectionID,
+	}
+}
+
+// Execute builds vector index
+func (t *BuildKnowledgeIndexTool) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	documents, ok := params["documents"].([]any)
+	if !ok {
+		return nil, fmt.Errorf("documents parameter required")
+	}
+
+	// Step 1: Extract text from documents
+	texts := make([]string, 0, len(documents))
+	for _, doc := range documents {
+		if m, ok := doc.(map[string]any); ok {
+			if text, ok := m["text"].(string); ok {
+				texts = append(texts, text)
+			} else if content, ok := m["content"].(string); ok {
+				texts = append(texts, content)
+			}
+		}
+	}
+
+	if len(texts) == 0 {
+		return nil, fmt.Errorf("no text content found in documents")
+	}
+
+	// Step 2: Generate embeddings
+	embeddings, err := t.embeddingClient.Embed(ctx, texts)
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate embeddings: %w", err)
+	}
+
+	// Step 3: Create Qdrant points
+	points := make([]QdrantPoint, 0, len(embeddings))
+	for i, embedding := range embeddings {
+		points = append(points, QdrantPoint{
+			ID:     fmt.Sprintf("doc-%d-%d", i, time.Now().UnixNano()),
+			Vector: embedding,
+			Payload: map[string]any{
+				"document":    documents[i],
+				"text":        texts[i],
+				"indexed_at":  time.Now().Format(time.RFC3339),
+			},
+		})
+	}
+
+	// Step 4: Upsert to Qdrant
+	if err := t.qdrantClient.Upsert(ctx, t.collectionID, points); err != nil {
+		return nil, fmt.Errorf("failed to upsert to Qdrant: %w", err)
+	}
+
+	return &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"collection_id":    t.collectionID,
+			"indexed_count":    len(points),
+			"vector_dimension": len(embeddings[0]),
+		},
+	}, nil
+}
+
+// RAGQueryTool queries RAG knowledge base
+type RAGQueryTool struct {
+	embeddingClient EmbeddingClient
+	qdrantClient   QdrantClient
+	llmProvider    LLMProvider
+}
+
+// NewRAGQueryTool creates a new RAG query tool
+func NewRAGQueryTool(embeddingClient EmbeddingClient, qdrantClient QdrantClient, llmProvider LLMProvider) *RAGQueryTool {
+	return &RAGQueryTool{
+		embeddingClient: embeddingClient,
+		qdrantClient:   qdrantClient,
+		llmProvider:    llmProvider,
+	}
+}
+
+// Execute queries RAG knowledge base
+func (t *RAGQueryTool) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	query, ok := params["query"].(string)
+	if !ok {
+		return nil, fmt.Errorf("query parameter required")
+	}
+
+	collection, ok := params["collection"].(string)
+	if !ok {
+		return nil, fmt.Errorf("collection parameter required")
+	}
+
+	topK := 5
+	if val, ok := params["top_k"].(int); ok {
+		topK = val
+	}
+
+	// Step 1: Generate query embedding
+	embeddings, err := t.embeddingClient.Embed(ctx, []string{query})
+	if err != nil {
+		return nil, fmt.Errorf("failed to generate embedding: %w", err)
+	}
+
+	// Step 2: Search Qdrant
+	results, err := t.qdrantClient.Search(ctx, collection, embeddings[0], topK)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search: %w", err)
+	}
+
+	// Step 3: Build context from results
+	var contextBuilder strings.Builder
+	for _, result := range results {
+		if content, ok := result.Payload["content"].(string); ok {
+			contextBuilder.WriteString(content)
+			contextBuilder.WriteString("\n\n")
+		}
+	}
+
+	// Step 4: Generate answer with LLM
+	if t.llmProvider != nil {
+		// TODO: Call LLM with context
+		return &ToolResult{
+			Success: true,
+			Data: map[string]any{
+				"answer":       "基于知识库的回答...",
+				"sources":      results,
+				"context_used": contextBuilder.String(),
+			},
+		}, nil
+	}
+
+	return &ToolResult{
+		Success: true,
+		Data: map[string]any{
+			"context": contextBuilder.String(),
+			"sources": results,
+		},
+	}, nil
 }

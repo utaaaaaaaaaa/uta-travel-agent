@@ -2,6 +2,7 @@
 package agent
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -14,6 +15,7 @@ const (
 	StatusReady    AgentStatus = "ready"
 	StatusBusy     AgentStatus = "busy"
 	StatusArchived AgentStatus = "archived"
+	StatusError    AgentStatus = "error"
 )
 
 // DestinationAgent represents a persisted destination agent
@@ -37,15 +39,27 @@ type DestinationAgent struct {
 }
 
 // Registry manages all agents in the system
+// It supports both in-memory and database-backed storage
 type Registry struct {
 	mu     sync.RWMutex
 	agents map[string]*DestinationAgent
+
+	// Optional repository for persistent storage
+	repo Repository
 }
 
-// NewRegistry creates a new agent registry
+// NewRegistry creates a new agent registry (in-memory only)
 func NewRegistry() *Registry {
 	return &Registry{
 		agents: make(map[string]*DestinationAgent),
+	}
+}
+
+// NewRegistryWithRepo creates a new agent registry with database backend
+func NewRegistryWithRepo(repo Repository) *Registry {
+	return &Registry{
+		agents: make(map[string]*DestinationAgent),
+		repo:   repo,
 	}
 }
 
@@ -54,11 +68,19 @@ func (r *Registry) Register(agent *DestinationAgent) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	agent.CreatedAt = time.Now()
-	agent.UpdatedAt = time.Now()
+	now := time.Now()
+	agent.CreatedAt = now
+	agent.UpdatedAt = now
 	agent.Status = StatusReady
 
 	r.agents[agent.ID] = agent
+
+	// Persist to database if repository is set
+	if r.repo != nil {
+		ctx := context.Background()
+		return r.repo.SaveAgent(ctx, agent)
+	}
+
 	return nil
 }
 
@@ -96,6 +118,13 @@ func (r *Registry) Update(agent *DestinationAgent) error {
 
 	agent.UpdatedAt = time.Now()
 	r.agents[agent.ID] = agent
+
+	// Persist to database if repository is set
+	if r.repo != nil {
+		ctx := context.Background()
+		return r.repo.UpdateAgent(ctx, agent)
+	}
+
 	return nil
 }
 
@@ -109,6 +138,13 @@ func (r *Registry) Delete(id string) error {
 	}
 
 	delete(r.agents, id)
+
+	// Delete from database if repository is set
+	if r.repo != nil {
+		ctx := context.Background()
+		return r.repo.DeleteAgent(ctx, id)
+	}
+
 	return nil
 }
 
@@ -122,4 +158,40 @@ func (r *Registry) List() []*DestinationAgent {
 		agents = append(agents, agent)
 	}
 	return agents
+}
+
+// LoadFromRepository loads all agents from the database into memory
+// This should be called on startup when using persistent storage
+func (r *Registry) LoadFromRepository(ctx context.Context, userID string) error {
+	if r.repo == nil {
+		return nil
+	}
+
+	var agents []*DestinationAgent
+	var err error
+
+	if userID != "" {
+		agents, err = r.repo.ListAgentsByUser(ctx, userID)
+	} else {
+		// Load all agents if userID is empty
+		agents, err = r.repo.ListAllAgents(ctx)
+	}
+
+	if err != nil {
+		return err
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, agent := range agents {
+		r.agents[agent.ID] = agent
+	}
+
+	return nil
+}
+
+// LoadAllFromRepository loads all agents from the database
+func (r *Registry) LoadAllFromRepository(ctx context.Context) error {
+	return r.LoadFromRepository(ctx, "")
 }

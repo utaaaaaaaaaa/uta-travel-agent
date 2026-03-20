@@ -143,12 +143,14 @@ export default function ChatPage() {
                     <p className="text-sm text-muted-foreground">介绍京都的热门景点</p>
                   </CardContent>
                 </Card>
-                <Card className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => setInput("帮我创建一个东京的导游 Agent")}>
-                  <CardContent className="p-4">
-                    <p className="font-medium">🗼 创建 Agent</p>
-                    <p className="text-sm text-muted-foreground">创建专属目的地 Agent</p>
-                  </CardContent>
-                </Card>
+                <Link href="/destinations/create">
+                  <Card className="cursor-pointer hover:bg-muted/50 transition-colors h-full">
+                    <CardContent className="p-4">
+                      <p className="font-medium">🗼 创建 Agent</p>
+                      <p className="text-sm text-muted-foreground">创建专属目的地 Agent</p>
+                    </CardContent>
+                  </Card>
+                </Link>
                 <Card className="cursor-pointer hover:bg-muted/50 transition-colors" onClick={() => setInput("推荐一个3天的京都行程")}>
                   <CardContent className="p-4">
                     <p className="font-medium">📅 行程规划</p>

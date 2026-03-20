@@ -36,7 +36,24 @@
       "Bash(curl -s http://localhost:8080/health)",
       "Bash(curl -s http://localhost:8080/api/v1/agent/status)",
       "Bash(curl -s -o /dev/null -w \"%{http_code}\" http://localhost:3000)",
-      "Bash(curl -s http://localhost:3000/chat)"
+      "Bash(curl -s http://localhost:3000/chat)",
+      "Bash(go get:*)",
+      "Bash(go doc:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker ps:*)",
+      "Bash(curl:*)",
+      "Bash(lsof -ti:8080)",
+      "Bash(xargs -r kill -9)",
+      "Bash(/dev/null echo:*)",
+      "Bash(lsof -ti:3001)",
+      "Bash(env)",
+      "Bash(grep -r DEEPSEEK /home/utaaa/uta-travel-agent --include=*.env* --include=*.yaml --include=*.json)",
+      "Bash(chmod:*)",
+      "Bash(grep:*)",
+      "Bash(ls -la /home/utaaa/uta-travel-agent/.env*)",
+      "Bash(find /home/utaaa/uta-travel-agent -name *_pb2*.py)",
+      "Bash(docker-compose up:*)",
+      "Bash(ls -la internal/agent/*.go internal/storage/postgres/*.go)"
     ]
   }
 }

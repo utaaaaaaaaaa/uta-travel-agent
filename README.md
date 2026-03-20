@@ -1,73 +1,179 @@
 # UTA Travel Agent
 
-Multi-Agent 智能旅游助手系统
+**Multi-Agent 智能旅游助手系统 | Intelligent Tourism Assistant System**
 
-## 项目状态
+[English](#english) | [中文](#中文)
 
-| 服务 | 端口 | 状态 |
-|-------|------|--------|
-| Orchestrator (Go) | 8080 | 开发中 |
-| Destination Agent | 8001 | 开发中 |
-| Guide Agent | 8002 | 开发中 |
-| Planner Agent | 8003 | 开发中 |
-| PostgreSQL | 5432 | 需配置 |
-| Redis | 6379 | 运行中 |
-| Qdrant | 6333 | 运行中 |
-| MinIO | 9000 | 运行中 |
+---
 
-## 快速开始
+## 中文
+
+### 项目简介
+
+UTA (Universal Travel Agent) 是一个基于 Multi-Agent 架构的智能旅游助手系统。核心理念是"Vibecoding"——让技术为体验服务，通过 AI Agent 为用户提供沉浸式的旅游文化体验。
+
+**核心功能**：
+- 🗺️ **目的地研究 Agent**: 自动搜索、整理旅游目的地信息，构建 RAG 知识库
+- 🎯 **智能导游 Agent**: 实地旅游时，基于位置/图片识别景点，提供文化背景讲解
+- 📅 **行程规划 Agent**: 根据用户偏好生成个性化旅游行程
+- 💾 **Agent 持久化**: 创建的目的地 Agent 永久保存，用户可随时调用
+- 🌍 **多语言支持**: 支持多语言交流和翻译
+
+### 技术栈
+
+| 层级 | 技术 | 用途 |
+|------|------|------|
+| 前端 | Next.js 15 + TypeScript | 用户界面、Agent 管理 |
+| 编排层 | Go + Gin | Agent 调度、任务路由、gRPC 网关 |
+| Agent 服务 | Python + gRPC | LLM 调用、RAG、向量检索 |
+| 向量数据库 | Qdrant | RAG 知识存储、向量检索 |
+| 关系数据库 | PostgreSQL | Agent 元数据持久化 |
+| LLM | DeepSeek / Claude API | 大语言模型能力 |
+
+### 快速开始
+
+#### 一键部署 (推荐)
 
 ```bash
-# 启动基础设施
-docker-compose up -d
+# 1. 克隆项目
+git clone https://github.com/utaaaaaaaaaa/uta-travel-agent.git
+cd uta-travel-agent
 
-# 启动 Go 服务
-cd cmd/orchestrator
-go run .
+# 2. 配置环境变量
+cp .env.example .env
+# 编辑 .env，添加你的 LLM API Key
 
-# 启动 Python 服务
-cd services/destination-agent
-uv run main:app --reload
+# 3. 一键启动所有服务
+docker-compose up -d --build
+```
 
-cd services/guide-agent
-uv run main:app --reload
+#### 访问地址
 
-cd services/planner-agent
-uv run main:app --reload
+| 服务 | 地址 | 说明 |
+|------|------|------|
+| 🌐 前端 | http://localhost:3000 | Next.js 应用 |
+| 🔌 API | http://localhost:8080 | Go API 服务 |
+| 📊 Qdrant | http://localhost:6333/dashboard | 向量数据库面板 |
+
+### 开发模式
+
+如果需要开发调试，可以只启动基础设施：
+
+```bash
+# 启动基础设施 (PostgreSQL + Qdrant + Redis)
+docker-compose -f docker-compose.dev.yml up -d
+
+# 启动 Go Orchestrator
+cd cmd/orchestrator && go run .
 
 # 启动前端
-cd apps/web
-npm run dev
+cd apps/web && npm run dev
 ```
 
-并创建其他必要文件。然后完成基础设施配置任务，创建项目文档。最后更新任务列表。现在创建 CI 配置和 README 等文档。让我完成并展示。然后准备推送到 GitHub。现在创建文档和配置。让我先创建 README.md 和更新项目目录结构。继续创建文档和核心流程文档、技术难点文档、然后创建 CI 配置。最终完成推送到 GitHub。让我创建项目文档和配置文件。我需要检查目录结构，然后创建文档和配置文件。先创建 README.md，然后创建文档目录结构说明。让我先查看当前目录结构，然后创建文档。README.md 文档，基础，创建核心流程文档、然后创建技术难点文档。最后创建 CI 配置。然后完成所有文档创建。最后推送到 GitHub。我先检查项目状态。然后检查是否有必要的目录。现在开始创建文档和配置文件。首先创建 README.md。好的，让我查看当前目录结构，然后创建 README.md 文件。README.md 风格需要简洁明了，介绍项目愿景、快速开始指南。安装说明等。README.md 文档应该包含项目介绍、快速开始指南、安装说明等，但 技术栈部分需要列出主要技术栈
-    - 技术栈: Go, Python, TypeScript 等
-    - 先决条件: Go 1.22+, Python 3.11+, Node.js 18+
-    - 开发环境: Docker, Make开发环境一致
-- 项目结构需要清晰展示项目目录结构
-    - 寽令需要列出目录及其说明
-- 安装依赖: 陑要详细说明安装步骤
-    - 对于 Go 项目，说明如何初始化 Go 模块和安装依赖
-    - 对于 Python 项目，说明如何使用 uv 创建虚拟环境
-    - 对于前端项目，说明如何安装依赖和启动开发服务器
-- 快速验证: 提供基本功能验证步骤
-- 故障排除: 常见问题及解决方案
-- 更多信息: 可选，提供链接到更多资源
-- 贡献指南: 说明如何为项目做贡献
-- 许可证: MIT License
-- 联系方式: GitHub Issues
+### 项目结构
 
-## 许可证
+```
+uta-travel-agent/
+├── apps/web/                    # 前端 (Next.js)
+├── cmd/orchestrator/            # Go 入口
+├── internal/                    # Go 包
+│   ├── agent/                   # Agent 核心实现
+│   ├── router/                  # HTTP 路由
+│   ├── grpc/                    # gRPC 客户端
+│   └── storage/                 # 存储层
+├── services/                    # Python 服务
+│   └── embedding/               # Embedding 服务
+├── proto/agent/                 # Protocol Buffers
+└── docker-compose.yml           # Docker 编排
+```
 
-本项目采用 MIT 许可证。
+---
+
+## English
+
+### Overview
+
+UTA (Universal Travel Agent) is an intelligent tourism assistant system built on a Multi-Agent architecture. The core philosophy is "Vibecoding" — technology serves experience, providing users with immersive travel and cultural experiences through AI Agents.
+
+**Key Features**:
+- 🗺️ **Destination Research Agent**: Automatically searches and organizes travel destination information, builds RAG knowledge bases
+- 🎯 **Intelligent Guide Agent**: Provides cultural background explanations based on location/photo recognition during trips
+- 📅 **Itinerary Planning Agent**: Generates personalized travel itineraries based on user preferences
+- 💾 **Agent Persistence**: Created destination agents are permanently saved and can be invoked anytime
+- 🌍 **Multi-language Support**: Supports multi-language communication and translation
+
+### Tech Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| Frontend | Next.js 15 + TypeScript | User interface, Agent management |
+| Orchestration | Go + Gin | Agent scheduling, task routing, gRPC gateway |
+| Agent Services | Python + gRPC | LLM calls, RAG, vector retrieval |
+| Vector DB | Qdrant | RAG knowledge storage, vector retrieval |
+| Relational DB | PostgreSQL | Agent metadata persistence |
+| LLM | DeepSeek / Claude API | Large language model capabilities |
+
+### Quick Start
+
+#### One-Command Deployment (Recommended)
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/utaaaaaaaaaa/uta-travel-agent.git
+cd uta-travel-agent
+
+# 2. Configure environment variables
+cp .env.example .env
+# Edit .env and add your LLM API Key
+
+# 3. Start all services with one command
+docker-compose up -d --build
+```
+
+#### Access URLs
+
+| Service | URL | Description |
+|---------|-----|-------------|
+| 🌐 Frontend | http://localhost:3000 | Next.js application |
+| 🔌 API | http://localhost:8080 | Go API service |
+| 📊 Qdrant | http://localhost:6333/dashboard | Vector database dashboard |
+
+### Development Mode
+
+For development and debugging, you can start only the infrastructure:
+
+```bash
+# Start infrastructure (PostgreSQL + Qdrant + Redis)
+docker-compose -f docker-compose.dev.yml up -d
+
+# Start Go Orchestrator
+cd cmd/orchestrator && go run .
+
+# Start Frontend
+cd apps/web && npm run dev
+```
+
+### Project Structure
+
+```
+uta-travel-agent/
+├── apps/web/                    # Frontend (Next.js)
+├── cmd/orchestrator/            # Go entrypoint
+├── internal/                    # Go packages
+│   ├── agent/                   # Agent core implementation
+│   ├── router/                  # HTTP routing
+│   ├── grpc/                    # gRPC clients
+│   └── storage/                 # Storage layer
+├── services/                    # Python services
+│   └── embedding/               # Embedding service
+├── proto/agent/                 # Protocol Buffers
+└── docker-compose.yml           # Docker compose
+```
+
+---
+
+## License
+
+MIT License
 
 Copyright (c) 2024 UTA Travel Agent Contributors
-
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS provided "as is", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT not limited to the warranties of MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN no event shall the authors or copyright holders be liable for any claim, damages or or other liability, whether in an action of contract, tort or otherwise, arising from, out of or in connection with the Software or the use or other dealings in the Software.
-```

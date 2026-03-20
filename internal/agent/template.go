@@ -182,3 +182,8 @@ func (r *TemplateRegistry) List() []AgentType {
 	}
 	return types
 }
+
+// Register registers a template for an agent type
+func (r *TemplateRegistry) Register(agentType AgentType, template *AgentTemplate) {
+	r.templates[agentType] = template
+}

@@ -5,7 +5,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { api, ChatResponse, CreateDestinationAgentRequest, CreateDestinationAgentResponse } from '@/lib/api/client';
+import { api, ChatResponse, CreateAgentRequest, CreateAgentResponse } from '@/lib/api/client';
 
 export function useChat() {
   const [loading, setLoading] = useState(false);
@@ -16,7 +16,7 @@ export function useChat() {
     setLoading(true);
     setError(null);
     try {
-      const response: ChatResponse = await api.chat({
+      const response: ChatResponse = await api.chat(sessionId || 'default', {
         message,
         session_id: sessionId || undefined,
       });
@@ -69,11 +69,11 @@ export function useAgents() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const createAgent = useCallback(async (data: CreateDestinationAgentRequest): Promise<CreateDestinationAgentResponse> => {
+  const createAgent = useCallback(async (data: CreateAgentRequest): Promise<CreateAgentResponse> => {
     setLoading(true);
     setError(null);
     try {
-      const response = await api.createDestinationAgent(data);
+      const response = await api.createAgent(data);
       return response;
     } catch (e) {
       const message = e instanceof Error ? e.message : 'Failed to create agent';
@@ -84,14 +84,29 @@ export function useAgents() {
     }
   }, []);
 
-  const getAgentStatus = useCallback(async () => {
+  const listAgents = useCallback(async (userId?: string) => {
     setLoading(true);
     setError(null);
     try {
-      const status = await api.getAgentStatus();
-      return status;
+      const result = await api.listAgents(userId);
+      return result;
     } catch (e) {
-      const message = e instanceof Error ? e.message : 'Failed to get status';
+      const message = e instanceof Error ? e.message : 'Failed to list agents';
+      setError(message);
+      throw e;
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const getAgent = useCallback(async (id: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const agent = await api.getAgent(id);
+      return agent;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : 'Failed to get agent';
       setError(message);
       throw e;
     } finally {
@@ -103,6 +118,7 @@ export function useAgents() {
     loading,
     error,
     createAgent,
-    getAgentStatus,
+    listAgents,
+    getAgent,
   };
 }

@@ -131,6 +131,8 @@ type AgentDecision struct {
 	Action      string         `json:"action"`
 	ToolName    string         `json:"tool_name,omitempty"`
 	ToolParams  map[string]any `json:"tool_params,omitempty"`
+	ToolArgs    map[string]any `json:"tool_args,omitempty"` // Alias for ToolParams
 	IsComplete  bool           `json:"is_complete"`
 	Output      any            `json:"output,omitempty"`
+	Result      string         `json:"result,omitempty"` // Result summary when complete
 }

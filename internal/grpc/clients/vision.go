@@ -3,7 +3,7 @@ package clients
 import (
 	"context"
 
-	pb "github.com/utaaa/uta-travel-agent/internal/gen/go/agent"
+	pb "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/vision"
 	"google.golang.org/grpc"
 )
 
@@ -110,8 +110,8 @@ func (c *VisionClient) RecognizeLandmark(ctx context.Context, req RecognizeLandm
 			Name:             resp.Landmark.Name,
 			Confidence:       float64(resp.Landmark.Confidence),
 			Description:      resp.Landmark.Description,
-			Category:         resp.Landmark.Category.GetValue(),
-			HistoricalPeriod: resp.Landmark.HistoricalPeriod.GetValue(),
+			Category:         resp.Landmark.GetCategory(),
+			HistoricalPeriod: resp.Landmark.GetHistoricalPeriod(),
 		}
 	}
 

@@ -55,16 +55,9 @@ func (f *AgentFactory) CreateAgentFromTemplate(agentType AgentType, template *Ag
 			Template:    template,
 			LLMProvider: f.llmProvider,
 		})
-	case AgentTypeResearcher:
-		agent = NewResearcherAgent(id, template)
-	case AgentTypeCurator:
-		agent = NewCuratorAgent(id, template)
-	case AgentTypeIndexer:
-		agent = NewIndexerAgent(id, template)
-	case AgentTypeGuide:
-		agent = NewGuideAgent(id, template, "")
-	case AgentTypePlanner:
-		agent = NewPlannerAgent(id, template)
+	case AgentTypeResearcher, AgentTypeCurator, AgentTypeIndexer, AgentTypeGuide, AgentTypePlanner:
+		// Create LLM-powered subagent
+		agent = f.createLLMSubagent(id, agentType, template)
 	default:
 		return nil, fmt.Errorf("unknown agent type: %s", agentType)
 	}
@@ -74,20 +67,36 @@ func (f *AgentFactory) CreateAgentFromTemplate(agentType AgentType, template *Ag
 		switch a := agent.(type) {
 		case *MainAgent:
 			a.BaseAgent.SetTools(f.toolRegistry)
-		case *ResearcherAgent:
-			a.BaseAgent.SetTools(f.toolRegistry)
-		case *CuratorAgent:
-			a.BaseAgent.SetTools(f.toolRegistry)
-		case *IndexerAgent:
-			a.BaseAgent.SetTools(f.toolRegistry)
-		case *GuideAgent:
-			a.BaseAgent.SetTools(f.toolRegistry)
-		case *PlannerAgent:
-			a.BaseAgent.SetTools(f.toolRegistry)
+		case *LLMAgent:
+			// LLMAgent already has tools set during creation
 		}
 	}
 
 	return agent, nil
+}
+
+// createLLMSubagent creates an LLM-powered subagent
+func (f *AgentFactory) createLLMSubagent(id string, agentType AgentType, template *AgentTemplate) *LLMAgent {
+	// Get the system prompt for this agent type
+	systemPrompt := GetSubagentPrompt(agentType)
+
+	// Get max iterations from template or use default
+	maxIterations := 10
+	if template != nil && template.Spec.Decision.MaxIterations > 0 {
+		maxIterations = template.Spec.Decision.MaxIterations
+	}
+
+	// Create the LLM agent
+	config := LLMAgentConfig{
+		ID:            id,
+		AgentType:     agentType,
+		LLMProvider:   f.llmProvider,
+		SystemPrompt:  systemPrompt,
+		Tools:         f.toolRegistry,
+		MaxIterations: maxIterations,
+	}
+
+	return NewLLMAgent(config)
 }
 
 // CreateMainAgentWithSubagents creates a main agent with all its subagents
@@ -160,16 +169,29 @@ func (f *AgentFactory) CreateDestinationAgent(destination string, userID string)
 
 // CreateGuideAgentForDestination creates a guide agent for an existing destination
 func (f *AgentFactory) CreateGuideAgentForDestination(destAgent *DestinationAgent) (Agent, error) {
-	template, err := f.templateRegistry.Get(AgentTypeGuide)
-	if err != nil {
-		return nil, err
+	// Get max iterations from template if available
+	maxIterations := 5 // Default for guide agent
+	if template, err := f.templateRegistry.Get(AgentTypeGuide); err == nil {
+		if template.Spec.Decision.MaxIterations > 0 {
+			maxIterations = template.Spec.Decision.MaxIterations
+		}
 	}
 
-	guide := NewGuideAgent(f.generateAgentID(), template, destAgent.VectorCollectionID)
+	// Create LLM-powered guide agent
+	id := f.generateAgentID()
+	systemPrompt := GetSubagentPrompt(AgentTypeGuide)
 
-	if f.toolRegistry != nil {
-		guide.BaseAgent.SetTools(f.toolRegistry)
+	// Add collection ID to the prompt
+	systemPrompt = systemPrompt + "\n\n## 当前导游集合\n你的知识库集合 ID 是: " + destAgent.VectorCollectionID
+
+	config := LLMAgentConfig{
+		ID:            id,
+		AgentType:     AgentTypeGuide,
+		LLMProvider:   f.llmProvider,
+		SystemPrompt:  systemPrompt,
+		Tools:         f.toolRegistry,
+		MaxIterations: maxIterations,
 	}
 
-	return guide, nil
+	return NewLLMAgent(config), nil
 }

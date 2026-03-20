@@ -3,7 +3,7 @@ package clients
 import (
 	"context"
 
-	pb "github.com/utaaa/uta-travel-agent/internal/gen/go/agent"
+	pb "github.com/utaaa/uta-travel-agent/internal/gen/go/agent/embedding"
 	"google.golang.org/grpc"
 )
 
