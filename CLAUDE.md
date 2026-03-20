@@ -607,22 +607,29 @@ type ExplorationStep struct {
 
 ### v0.5.0-alpha 规划
 
-**目标**: 完善导游功能和多语言支持
+**目标**: 实现真正可用的导游 Agent
 
-1. **实时导游增强**
-   - 位置服务集成
-   - 图片识别景点
-   - 离线模式支持
+详细计划见: [docs/roadmap/v0.5.0-alpha.md](docs/roadmap/v0.5.0-alpha.md)
 
-2. **行程规划 Agent**
-   - 时间优化算法
-   - 预算估算
-   - 路线规划
+#### Phase 1: 真实 Agent 创建流程
+- 搜索工具实现 (SerpAPI)
+- 接入真实 LLM 调用
+- 向量索引创建
 
-3. **多语言支持**
-   - 语言检测
-   - 实时翻译
-   - 多语言知识库
+#### Phase 2: RAG 导游功能
+- 聊天集成 RAG 检索
+- 景点数据从知识库加载
+- 来源引用显示
+
+#### Phase 3: Subagent 升级
+- Researcher Agent 自主探索
+- Curator Agent 内容整理
+- Indexer Agent 向量索引
+
+#### Phase 4: 体验优化
+- LLM 流式输出
+- 错误处理完善
+- 性能优化
 
 ### ⚠️ 开发规范
 

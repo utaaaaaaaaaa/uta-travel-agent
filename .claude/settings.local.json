@@ -53,7 +53,20 @@
       "Bash(ls -la /home/utaaa/uta-travel-agent/.env*)",
       "Bash(find /home/utaaa/uta-travel-agent -name *_pb2*.py)",
       "Bash(docker-compose up:*)",
-      "Bash(ls -la internal/agent/*.go internal/storage/postgres/*.go)"
+      "Bash(ls -la internal/agent/*.go internal/storage/postgres/*.go)",
+      "Bash(git reset:*)",
+      "Bash(export http_proxy=http://10.236.193.206:10809)",
+      "Bash(export https_proxy=http://10.236.193.206:10809)",
+      "Bash(git config:*)",
+      "Bash(ls -la internal/agent/*.go)",
+      "Read(//home/utaaa/uta-travel-agent/**)",
+      "Bash(find internal/storage -name *.go)",
+      "Bash(find internal/grpc -name *.go)",
+      "Bash(find services:*)",
+      "Bash(ls apps/web/src/hooks/*.ts)",
+      "Bash(ls apps/web/src/lib/**/*.ts)",
+      "Bash(find internal/rag -name *.go)",
+      "Bash(cat internal/rag/*.go)"
     ]
   }
 }
