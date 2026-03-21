@@ -36,6 +36,7 @@ type TaskHandler func(ctx context.Context, task *ScheduledTask) error
 // Scheduler manages task execution with queue, workers, and retry
 type Scheduler struct {
 	registry *agent.Registry
+	repo     agent.Repository // Optional repository for persistence
 	mu       sync.RWMutex
 	tasks    map[string]*ScheduledTask
 
@@ -59,6 +60,7 @@ type Scheduler struct {
 // SchedulerConfig for creating a scheduler
 type SchedulerConfig struct {
 	Registry    *agent.Registry
+	Repository  agent.Repository // Optional repository for persistence
 	WorkerCount int
 	QueueSize   int
 }
@@ -78,6 +80,7 @@ func NewSchedulerWithConfig(cfg SchedulerConfig) *Scheduler {
 
 	s := &Scheduler{
 		registry:    cfg.Registry,
+		repo:        cfg.Repository,
 		tasks:       make(map[string]*ScheduledTask),
 		queues:      make(map[TaskPriority]chan *ScheduledTask),
 		workerCount: cfg.WorkerCount,
@@ -180,9 +183,11 @@ func (s *Scheduler) Save(task *agent.AgentTask) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if existing, ok := s.tasks[task.ID]; ok {
-		// Update existing task
-		existing.AgentTask = task
+	existingInMemory := false
+	if _, ok := s.tasks[task.ID]; ok {
+		// Update existing task in memory
+		s.tasks[task.ID].AgentTask = task
+		existingInMemory = true
 	} else {
 		// Create new scheduled task
 		s.tasks[task.ID] = &ScheduledTask{
@@ -190,6 +195,22 @@ func (s *Scheduler) Save(task *agent.AgentTask) {
 			Priority:    PriorityNormal,
 			MaxRetries:  3,
 			SubmittedAt: time.Now(),
+		}
+	}
+
+	// Persist to database if repository is available
+	if s.repo != nil {
+		ctx := context.Background()
+		var err error
+		if existingInMemory {
+			// Use UPDATE for existing tasks
+			err = s.repo.UpdateTask(ctx, task)
+		} else {
+			// Use INSERT for new tasks
+			err = s.repo.SaveTask(ctx, task)
+		}
+		if err != nil {
+			log.Printf("Warning: Failed to persist task %s: %v", task.ID, err)
 		}
 	}
 }
@@ -232,6 +253,30 @@ func (s *Scheduler) List() []*agent.AgentTask {
 		tasks = append(tasks, task.AgentTask)
 	}
 	return tasks
+}
+
+// GetByAgentID returns the first task for a given agent ID
+func (s *Scheduler) GetByAgentID(agentID string) (*agent.AgentTask, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, task := range s.tasks {
+		if task.AgentTask != nil && task.AgentTask.AgentID == agentID {
+			return task.AgentTask, true
+		}
+	}
+	return nil, false
+}
+
+// persistTask saves the task to the database if repository is available
+func (s *Scheduler) persistTask(task *ScheduledTask) {
+	if s.repo == nil || task.AgentTask == nil {
+		return
+	}
+	ctx := context.Background()
+	if err := s.repo.SaveTask(ctx, task.AgentTask); err != nil {
+		log.Printf("Warning: Failed to persist task %s: %v", task.ID, err)
+	}
 }
 
 // Metrics returns scheduler metrics
@@ -334,6 +379,7 @@ func (s *Scheduler) executeTask(workerID int, task *ScheduledTask) {
 			task.Error = err.Error()
 			completed := time.Now()
 			task.CompletedAt = &completed
+			s.persistTask(task) // Persist final state
 			atomic.AddInt64(&s.failedCount, 1)
 			log.Printf("Worker %d: Task %s failed permanently after %d attempts", workerID, task.ID, task.RetryCount+1)
 		}
@@ -343,6 +389,7 @@ func (s *Scheduler) executeTask(workerID int, task *ScheduledTask) {
 		task.Status = agent.TaskStatusCompleted
 		task.CompletedAt = &completed
 		task.DurationSeconds = completed.Sub(task.SubmittedAt).Seconds()
+		s.persistTask(task) // Persist final state
 		atomic.AddInt64(&s.completedCount, 1)
 		log.Printf("Worker %d: Task %s completed in %.2fs", workerID, task.ID, task.DurationSeconds)
 	}

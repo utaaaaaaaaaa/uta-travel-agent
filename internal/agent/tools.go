@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/utaaa/uta-travel-agent/internal/tools"
 )
 
 // Tool types
@@ -91,6 +93,109 @@ func (r *DefaultToolRegistry) ListTools() []Tool {
 		tools = append(tools, tool)
 	}
 	return tools
+}
+
+// ToolConfig holds configuration for tool initialization.
+type ToolConfig struct {
+	TavilyAPIKey string
+}
+
+// SetupResearchTools registers tools for Research Agent (high-quality data sources).
+func SetupResearchTools(registry ToolRegistry, config ToolConfig) error {
+	// Wikipedia Search - for authoritative static knowledge
+	wikiTool := tools.NewWikipediaSearchTool("zh") // Default to Chinese
+	if err := registry.Register(Tool{
+		Name:        wikiTool.GetName(),
+		Type:        ToolTypeMCP,
+		Description: wikiTool.GetDescription(),
+		Parameters:  wikiTool.GetParameters(),
+	}, &toolExecutorAdapter{impl: wikiTool}); err != nil {
+		return fmt.Errorf("failed to register wikipedia_search: %w", err)
+	}
+
+	// Web Reader - for reading specific pages
+	webReader := tools.NewWebReaderTool()
+	if err := registry.Register(Tool{
+		Name:        webReader.GetName(),
+		Type:        ToolTypeMCP,
+		Description: webReader.GetDescription(),
+		Parameters:  webReader.GetParameters(),
+	}, &toolExecutorAdapter{impl: webReader}); err != nil {
+		return fmt.Errorf("failed to register web_reader: %w", err)
+	}
+
+	return nil
+}
+
+// SetupDestinationTools registers tools for Destination Agent (RAG + real-time search).
+func SetupDestinationTools(registry ToolRegistry, config ToolConfig) error {
+	// Tavily Search - for real-time information
+	if config.TavilyAPIKey != "" {
+		tavilyTool := tools.NewTavilySearchTool(config.TavilyAPIKey)
+		if err := registry.Register(Tool{
+			Name:        tavilyTool.GetName(),
+			Type:        ToolTypeMCP,
+			Description: tavilyTool.GetDescription(),
+			Parameters:  tavilyTool.GetParameters(),
+		}, &toolExecutorAdapter{impl: tavilyTool}); err != nil {
+			return fmt.Errorf("failed to register tavily_search: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// SetupMainTools registers tools for Main Agent (general assistant).
+func SetupMainTools(registry ToolRegistry, config ToolConfig) error {
+	// Tavily Search - for real-time information
+	if config.TavilyAPIKey != "" {
+		tavilyTool := tools.NewTavilySearchTool(config.TavilyAPIKey)
+		if err := registry.Register(Tool{
+			Name:        tavilyTool.GetName(),
+			Type:        ToolTypeMCP,
+			Description: tavilyTool.GetDescription(),
+			Parameters:  tavilyTool.GetParameters(),
+		}, &toolExecutorAdapter{impl: tavilyTool}); err != nil {
+			return fmt.Errorf("failed to register tavily_search: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// SetupAllTools registers all available tools.
+func SetupAllTools(registry ToolRegistry, config ToolConfig) error {
+	if err := SetupResearchTools(registry, config); err != nil {
+		return err
+	}
+	if err := SetupDestinationTools(registry, config); err != nil {
+		return err
+	}
+	if err := SetupMainTools(registry, config); err != nil {
+		return err
+	}
+	return nil
+}
+
+// toolExecutorAdapter adapts our tools.Tool interface to agent.ToolExecutor.
+type toolExecutorAdapter struct {
+	impl interface {
+		Execute(ctx context.Context, params map[string]any) (map[string]any, error)
+	}
+}
+
+func (a *toolExecutorAdapter) Execute(ctx context.Context, params map[string]any) (*ToolResult, error) {
+	result, err := a.impl.Execute(ctx, params)
+	if err != nil {
+		return &ToolResult{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+	return &ToolResult{
+		Success: true,
+		Data:    result,
+	}, nil
 }
 
 // --- MCP Tools ---

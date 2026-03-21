@@ -79,4 +79,7 @@ next-env.d.ts
 api-gateway
 
 # Test coverage
-coverage/
+coverage/services/embedding/.venv/
+services/embedding/venv/
+services/embedding/models/
+orchestrator

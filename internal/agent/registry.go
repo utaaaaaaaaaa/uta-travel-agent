@@ -26,6 +26,7 @@ type DestinationAgent struct {
 	Description        string      `json:"description"`
 	Destination        string      `json:"destination"`
 	VectorCollectionID string      `json:"vector_collection_id"`
+	TaskID             string      `json:"task_id"`
 	DocumentCount      int         `json:"document_count"`
 	Language           string      `json:"language"`
 	Tags               []string    `json:"tags"`

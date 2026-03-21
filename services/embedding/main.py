@@ -8,6 +8,10 @@ import logging
 import os
 import sys
 
+# Set offline mode BEFORE any imports
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
+
 # Add current directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 

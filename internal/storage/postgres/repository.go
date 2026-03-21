@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/lib/pq"
 	"github.com/utaaa/uta-travel-agent/internal/agent"
 )
 
@@ -26,13 +27,11 @@ func (r *AgentRepository) SaveAgent(ctx context.Context, ag *agent.DestinationAg
 	query := `
 		INSERT INTO destination_agents (
 			id, user_id, name, description, destination,
-			vector_collection_id, document_count, language, theme,
+			vector_collection_id, task_id, document_count, language, theme,
 			status, tags, created_at, updated_at, last_used_at,
 			usage_count, rating
-		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)
 	`
-
-	tagsJSON, _ := json.Marshal(ag.Tags)
 
 	var lastUsedAt interface{}
 	if ag.LastUsedAt != nil {
@@ -41,8 +40,8 @@ func (r *AgentRepository) SaveAgent(ctx context.Context, ag *agent.DestinationAg
 
 	_, err := r.db.ExecContext(ctx, query,
 		ag.ID, ag.UserID, ag.Name, ag.Description, ag.Destination,
-		ag.VectorCollectionID, ag.DocumentCount, ag.Language, ag.Theme,
-		ag.Status, tagsJSON, ag.CreatedAt, ag.UpdatedAt, lastUsedAt,
+		ag.VectorCollectionID, ag.TaskID, ag.DocumentCount, ag.Language, ag.Theme,
+		ag.Status, pq.Array(ag.Tags), ag.CreatedAt, ag.UpdatedAt, lastUsedAt,
 		ag.UsageCount, ag.Rating,
 	)
 
@@ -53,7 +52,7 @@ func (r *AgentRepository) SaveAgent(ctx context.Context, ag *agent.DestinationAg
 func (r *AgentRepository) GetAgent(ctx context.Context, id string) (*agent.DestinationAgent, error) {
 	query := `
 		SELECT id, user_id, name, description, destination,
-			   vector_collection_id, document_count, language, theme,
+			   vector_collection_id, task_id, document_count, language, theme,
 			   status, tags, created_at, updated_at, last_used_at,
 			   usage_count, rating
 		FROM destination_agents
@@ -61,14 +60,13 @@ func (r *AgentRepository) GetAgent(ctx context.Context, id string) (*agent.Desti
 	`
 
 	var ag agent.DestinationAgent
-	var tagsJSON []byte
 	var lastUsedAt sql.NullTime
-	var description, vectorCollectionID sql.NullString
+	var description, vectorCollectionID, taskID sql.NullString
 
 	err := r.db.QueryRowContext(ctx, query, id).Scan(
 		&ag.ID, &ag.UserID, &ag.Name, &description, &ag.Destination,
-		&vectorCollectionID, &ag.DocumentCount, &ag.Language, &ag.Theme,
-		&ag.Status, &tagsJSON, &ag.CreatedAt, &ag.UpdatedAt, &lastUsedAt,
+		&vectorCollectionID, &taskID, &ag.DocumentCount, &ag.Language, &ag.Theme,
+		&ag.Status, pq.Array(&ag.Tags), &ag.CreatedAt, &ag.UpdatedAt, &lastUsedAt,
 		&ag.UsageCount, &ag.Rating,
 	)
 
@@ -81,7 +79,7 @@ func (r *AgentRepository) GetAgent(ctx context.Context, id string) (*agent.Desti
 
 	ag.Description = description.String
 	ag.VectorCollectionID = vectorCollectionID.String
-	json.Unmarshal(tagsJSON, &ag.Tags)
+	ag.TaskID = taskID.String
 
 	if lastUsedAt.Valid {
 		ag.LastUsedAt = &lastUsedAt.Time
@@ -94,7 +92,7 @@ func (r *AgentRepository) GetAgent(ctx context.Context, id string) (*agent.Desti
 func (r *AgentRepository) ListAgentsByUser(ctx context.Context, userID string) ([]*agent.DestinationAgent, error) {
 	query := `
 		SELECT id, user_id, name, description, destination,
-			   vector_collection_id, document_count, language, theme,
+			   vector_collection_id, task_id, document_count, language, theme,
 			   status, tags, created_at, updated_at, last_used_at,
 			   usage_count, rating
 		FROM destination_agents
@@ -109,7 +107,7 @@ func (r *AgentRepository) ListAgentsByUser(ctx context.Context, userID string) (
 func (r *AgentRepository) ListAllAgents(ctx context.Context) ([]*agent.DestinationAgent, error) {
 	query := `
 		SELECT id, user_id, name, description, destination,
-			   vector_collection_id, document_count, language, theme,
+			   vector_collection_id, task_id, document_count, language, theme,
 			   status, tags, created_at, updated_at, last_used_at,
 			   usage_count, rating
 		FROM destination_agents
@@ -123,7 +121,7 @@ func (r *AgentRepository) ListAllAgents(ctx context.Context) ([]*agent.Destinati
 func (r *AgentRepository) ListAgents(ctx context.Context, limit, offset int) ([]*agent.DestinationAgent, error) {
 	query := `
 		SELECT id, user_id, name, description, destination,
-			   vector_collection_id, document_count, language, theme,
+			   vector_collection_id, task_id, document_count, language, theme,
 			   status, tags, created_at, updated_at, last_used_at,
 			   usage_count, rating
 		FROM destination_agents
@@ -139,13 +137,11 @@ func (r *AgentRepository) UpdateAgent(ctx context.Context, ag *agent.Destination
 	query := `
 		UPDATE destination_agents SET
 			name = $2, description = $3, vector_collection_id = $4,
-			document_count = $5, language = $6, theme = $7,
-			status = $8, tags = $9, updated_at = $10,
-			last_used_at = $11, usage_count = $12, rating = $13
+			task_id = $5, document_count = $6, language = $7, theme = $8,
+			status = $9, tags = $10, updated_at = $11,
+			last_used_at = $12, usage_count = $13, rating = $14
 		WHERE id = $1
 	`
-
-	tagsJSON, _ := json.Marshal(ag.Tags)
 
 	var lastUsedAt interface{}
 	if ag.LastUsedAt != nil {
@@ -154,8 +150,8 @@ func (r *AgentRepository) UpdateAgent(ctx context.Context, ag *agent.Destination
 
 	result, err := r.db.ExecContext(ctx, query,
 		ag.ID, ag.Name, ag.Description, ag.VectorCollectionID,
-		ag.DocumentCount, ag.Language, ag.Theme, ag.Status,
-		tagsJSON, time.Now(), lastUsedAt, ag.UsageCount, ag.Rating,
+		ag.TaskID, ag.DocumentCount, ag.Language, ag.Theme, ag.Status,
+		pq.Array(ag.Tags), time.Now(), lastUsedAt, ag.UsageCount, ag.Rating,
 	)
 
 	if err != nil {
@@ -343,14 +339,13 @@ func (r *AgentRepository) queryAgents(ctx context.Context, query string, args ..
 
 	for rows.Next() {
 		var ag agent.DestinationAgent
-		var tagsJSON []byte
 		var lastUsedAt sql.NullTime
-		var description, vectorCollectionID sql.NullString
+		var description, vectorCollectionID, taskID sql.NullString
 
 		err := rows.Scan(
 			&ag.ID, &ag.UserID, &ag.Name, &description, &ag.Destination,
-			&vectorCollectionID, &ag.DocumentCount, &ag.Language, &ag.Theme,
-			&ag.Status, &tagsJSON, &ag.CreatedAt, &ag.UpdatedAt, &lastUsedAt,
+			&vectorCollectionID, &taskID, &ag.DocumentCount, &ag.Language, &ag.Theme,
+			&ag.Status, pq.Array(&ag.Tags), &ag.CreatedAt, &ag.UpdatedAt, &lastUsedAt,
 			&ag.UsageCount, &ag.Rating,
 		)
 		if err != nil {
@@ -359,7 +354,7 @@ func (r *AgentRepository) queryAgents(ctx context.Context, query string, args ..
 
 		ag.Description = description.String
 		ag.VectorCollectionID = vectorCollectionID.String
-		json.Unmarshal(tagsJSON, &ag.Tags)
+		ag.TaskID = taskID.String
 
 		if lastUsedAt.Valid {
 			ag.LastUsedAt = &lastUsedAt.Time

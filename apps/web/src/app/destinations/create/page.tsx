@@ -196,50 +196,61 @@ function RadarVisualization({
           );
         })}
 
-        {/* Agent positions */}
-        {agents.filter(a => a.status === 'running').map((agent) => {
+        {/* Agent positions - show ALL agents */}
+        {agents.map((agent) => {
           const angleRad = (agent.angle * Math.PI) / 180;
-          const distance = radius * 0.7;
-          const x = center + distance * Math.cos(angleRad);
-          const y = center + distance * Math.sin(angleRad);
+          // Different distances for different agent types
+          const baseDistance = agent.id.startsWith("researcher") ? radius * 0.6 :
+                               agent.id === "curator-1" ? radius * 0.35 :
+                               radius * 0.25;
+          const x = center + baseDistance * Math.cos(angleRad);
+          const y = center + baseDistance * Math.sin(angleRad);
+          const isRunning = agent.status === 'running';
+          const isCompleted = agent.status === 'completed';
 
           return (
             <g key={agent.id}>
-              {/* Agent glow */}
-              <circle
-                cx={x}
-                cy={y}
-                r="12"
-                fill={agent.color}
-                opacity="0.3"
-              >
-                <animate
-                  attributeName="r"
-                  values="12;16;12"
-                  dur="1.5s"
-                  repeatCount="indefinite"
-                />
-                <animate
-                  attributeName="opacity"
-                  values="0.3;0.5;0.3"
-                  dur="1.5s"
-                  repeatCount="indefinite"
-                />
-              </circle>
+              {/* Agent glow - only for running agents */}
+              {isRunning && (
+                <circle
+                  cx={x}
+                  cy={y}
+                  r="12"
+                  fill={agent.color}
+                  opacity="0.3"
+                >
+                  <animate
+                    attributeName="r"
+                    values="12;16;12"
+                    dur="1.5s"
+                    repeatCount="indefinite"
+                  />
+                  <animate
+                    attributeName="opacity"
+                    values="0.3;0.5;0.3"
+                    dur="1.5s"
+                    repeatCount="indefinite"
+                  />
+                </circle>
+              )}
               {/* Agent dot */}
               <circle
                 cx={x}
                 cy={y}
-                r="6"
+                r={isRunning ? 8 : isCompleted ? 6 : 5}
                 fill={agent.color}
+                opacity={isCompleted ? 0.7 : 1}
+                stroke={isCompleted ? "#fff" : undefined}
+                strokeWidth={isCompleted ? 2 : 0}
               />
               {/* Agent label */}
               <text
                 x={x}
-                y={y - 18}
+                y={y + 20}
                 textAnchor="middle"
-                className="text-[10px] fill-current font-medium"
+                className="text-[9px] font-bold"
                 fill={agent.color}
+                opacity={isCompleted ? 0.7 : 1}
               >
                 {agent.name}
               </text>
@@ -260,18 +271,30 @@ function RadarVisualization({
       </svg>
 
       {/* Legend */}
-      <div className="absolute -bottom-8 left-0 right-0 flex justify-center gap-4 text-xs">
+      <div className="absolute -bottom-8 left-0 right-0 flex justify-center gap-3 text-xs flex-wrap">
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full bg-blue-500" />
-          <span>研究员</span>
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#3b82f6" }} />
+          <span>R1</span>
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full bg-purple-500" />
-          <span>整理员</span>
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#f97316" }} />
+          <span>R2</span>
         </div>
         <div className="flex items-center gap-1">
-          <div className="w-2 h-2 rounded-full bg-green-500" />
-          <span>索引员</span>
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#a855f7" }} />
+          <span>R3</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: "#22c55e" }} />
+          <span>R4</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full bg-pink-500" />
+          <span>Curator</span>
+        </div>
+        <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full bg-cyan-500" />
+          <span>Indexer</span>
         </div>
       </div>
     </div>
@@ -341,14 +364,20 @@ export default function CreateDestinationPage() {
   const [status, setStatus] = useState<'idle' | 'creating' | 'completed' | 'error'>('idle');
   const [error, setError] = useState<string | null>(null);
   const [agentId, setAgentId] = useState<string | null>(null);
+  const [taskId, setTaskId] = useState<string | null>(null);
 
   // Radar state
   const [scanAngle, setScanAngle] = useState(0);
   const [explorationPoints, setExplorationPoints] = useState<ExplorationPoint[]>([]);
   const [agents, setAgents] = useState<AgentState[]>([
-    { id: "researcher", name: "研究员", status: "idle", angle: -90, targetAngle: -90, color: "#3b82f6" },
-    { id: "curator", name: "整理员", status: "idle", angle: 90, targetAngle: 90, color: "#8b5cf6" },
-    { id: "indexer", name: "索引员", status: "idle", angle: 180, targetAngle: 180, color: "#10b981" },
+    // 4 Researchers - different colors and positions
+    { id: "researcher-1", name: "R1", status: "idle", angle: -90, targetAngle: -90, color: "#3b82f6" },
+    { id: "researcher-2", name: "R2", status: "idle", angle: -30, targetAngle: -30, color: "#f97316" },
+    { id: "researcher-3", name: "R3", status: "idle", angle: 30, targetAngle: 30, color: "#a855f7" },
+    { id: "researcher-4", name: "R4", status: "idle", angle: 90, targetAngle: 90, color: "#22c55e" },
+    // Curator and Indexer
+    { id: "curator-1", name: "C", status: "idle", angle: 180, targetAngle: 180, color: "#ec4899" },
+    { id: "indexer-1", name: "I", status: "idle", angle: 210, targetAngle: 210, color: "#06b6d4" },
   ]);
   const [totalTokens, setTotalTokens] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -417,15 +446,26 @@ export default function CreateDestinationPage() {
   const moveAgent = (agentId: string, direction: string) => {
     const dirAngles: Record<string, number> = {
       "景点": -90,
+      "attractions": -90,
       "美食": -30,
+      "food": -30,
+      "历史": 30,
       "文化": 30,
+      "history": 30,
       "交通": 90,
+      "transport": 90,
       "住宿": 150,
+      "accommodation": 150,
       "购物": 210,
+      "shopping": 210,
+      "策展": 270,
+      "curating": 270,
+      "索引": 300,
+      "indexing": 300,
     };
 
     setAgents((prev) => prev.map((a) =>
-      a.id === agentId
+      a.id === agentId || (agentId.startsWith("researcher") && a.id === agentId)
         ? { ...a, targetAngle: dirAngles[direction] || a.targetAngle }
         : a
     ));
@@ -454,9 +494,9 @@ export default function CreateDestinationPage() {
     setDuration(0);
     startTimeRef.current = Date.now();
 
-    // Set researcher as running
+    // Set all researchers as running
     setAgents((prev) => prev.map((a) =>
-      a.id === "researcher" ? { ...a, status: "running" } : a
+      a.id.startsWith("researcher") ? { ...a, status: "running" } : a
     ));
 
     try {
@@ -478,31 +518,69 @@ export default function CreateDestinationPage() {
       const data = await response.json();
       const { agent_id, task_id } = data;
       setAgentId(agent_id);
+      setTaskId(task_id);
 
       // 2. Connect to SSE for progress updates
+      console.log('Connecting to SSE:', `${API_BASE_URL}/api/v1/tasks/${task_id}/stream`);
       const eventSource = new EventSource(`${API_BASE_URL}/api/v1/tasks/${task_id}/stream`);
 
-      eventSource.onmessage = (event) => {
-        try {
-          const progressData = JSON.parse(event.data);
-          handleProgressUpdate(progressData);
-        } catch (e) {
-          console.error('Failed to parse SSE data:', e);
-        }
+      eventSource.onopen = () => {
+        console.log('SSE connection opened');
       };
 
-      eventSource.addEventListener('progress', (event) => {
+      // Listen for 'step' events (individual exploration steps)
+      eventSource.addEventListener('step', (event: MessageEvent) => {
         try {
-          const progressData = JSON.parse((event as MessageEvent).data);
-          handleProgressUpdate(progressData);
+          const stepData = JSON.parse(event.data);
+          console.log('Step received:', stepData);
+
+          const agentType = getAgentTypeFromStage(stepData.action, stepData.direction);
+          console.log('Agent type:', agentType, 'Direction:', stepData.direction);
+
+          // Update agent status based on action
+          updateAgentStatus(stepData.action, stepData.direction);
+
+          // Add exploration point to radar
+          addExplorationPoint(
+            agentType,
+            stepData.direction || '综合',
+            stepData.thought || ''
+          );
+
+          // Move the specific agent to direction
+          moveAgent(agentType, stepData.direction || '综合');
+        } catch (e) {
+          console.error('Failed to parse step event:', e);
+        }
+      });
+
+      // Listen for 'progress' events (overall progress)
+      eventSource.addEventListener('progress', (event: MessageEvent) => {
+        try {
+          const progressData = JSON.parse(event.data);
+          console.log('Progress received:', progressData);
+
+          // Update agent status based on stage
+          if (progressData.stage) {
+            updateAgentStatus(progressData.stage);
+          }
         } catch (e) {
           console.error('Failed to parse progress event:', e);
         }
       });
 
-      eventSource.addEventListener('complete', (event) => {
+      eventSource.addEventListener('status', (event: MessageEvent) => {
         try {
-          const completeData = JSON.parse((event as MessageEvent).data);
+          const statusData = JSON.parse(event.data);
+          console.log('Status received:', statusData);
+        } catch (e) {
+          console.error('Failed to parse status event:', e);
+        }
+      });
+
+      eventSource.addEventListener('complete', (event: MessageEvent) => {
+        try {
+          const completeData = JSON.parse(event.data);
           console.log('Task completed:', completeData);
 
           // Update tokens and duration
@@ -623,38 +701,70 @@ export default function CreateDestinationPage() {
     poll();
   };
 
-  // Helper: get agent type from stage
-  const getAgentTypeFromStage = (stage?: string): string => {
-    if (!stage) return "researcher";
-    if (stage.includes('research') || stage === 'exploring') return "researcher";
-    if (stage.includes('curat')) return "curator";
-    if (stage.includes('index')) return "indexer";
-    return "researcher";
+  // Helper: get agent type from stage and direction
+  const getAgentTypeFromStage = (stage?: string, direction?: string): string => {
+    if (!stage) return "researcher-1";
+
+    // For research stage, map direction to specific researcher
+    if (stage.includes('research') || stage === 'researching' || stage === 'exploring') {
+      // Map directions/topics to researchers
+      const topicToResearcher: Record<string, string> = {
+        "景点": "researcher-1",
+        "attractions": "researcher-1",
+        "美食": "researcher-2",
+        "food": "researcher-2",
+        "历史": "researcher-3",
+        "history": "researcher-3",
+        "文化": "researcher-3",
+        "交通": "researcher-4",
+        "transport": "researcher-4",
+      };
+      if (direction && topicToResearcher[direction]) {
+        return topicToResearcher[direction];
+      }
+      // Default to researcher-1 if direction not found
+      return "researcher-1";
+    }
+
+    if (stage.includes('curat')) return "curator-1";
+    if (stage.includes('index')) return "indexer-1";
+    return "researcher-1";
   };
 
   // Helper: update agent status based on stage
-  const updateAgentStatus = (stage: string) => {
+  const updateAgentStatus = (stage: string, direction?: string) => {
+    console.log('Updating agent status for stage:', stage, 'direction:', direction);
     setAgents((prev) => {
       const newAgents = [...prev];
 
-      if (stage.includes('research')) {
+      if (stage.includes('research') || stage === 'researching') {
+        // All researchers are running
         return newAgents.map((a) =>
-          a.id === "researcher" ? { ...a, status: "running" } :
-          a.status === "running" ? { ...a, status: "completed" } : a
+          a.id.startsWith("researcher")
+            ? { ...a, status: "running" }
+            : a
         );
       }
 
-      if (stage.includes('curat')) {
+      if (stage.includes('curat') || stage === 'curating') {
+        // Curator is running, researchers completed
         return newAgents.map((a) =>
-          a.id === "curator" ? { ...a, status: "running" } :
-          a.id === "researcher" ? { ...a, status: "completed" } : a
+          a.id === "curator-1"
+            ? { ...a, status: "running" }
+            : a.id.startsWith("researcher")
+              ? { ...a, status: "completed" }
+              : a
         );
       }
 
-      if (stage.includes('index')) {
+      if (stage.includes('index') || stage === 'indexing') {
+        // Indexer is running, curator completed
         return newAgents.map((a) =>
-          a.id === "indexer" ? { ...a, status: "running" } :
-          a.id === "curator" ? { ...a, status: "completed" } : a
+          a.id === "indexer-1"
+            ? { ...a, status: "running" }
+            : a.id === "curator-1"
+              ? { ...a, status: "completed" }
+              : a
         );
       }
 
@@ -669,8 +779,8 @@ export default function CreateDestinationPage() {
   };
 
   const handleViewTaskDetails = () => {
-    if (agentId) {
-      router.push(`/tasks/${agentId}`);
+    if (taskId) {
+      router.push(`/tasks/${taskId}`);
     }
   };
 

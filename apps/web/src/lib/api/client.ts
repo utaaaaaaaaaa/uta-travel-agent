@@ -12,6 +12,7 @@ export interface Agent {
   description: string;
   destination: string;
   vector_collection_id?: string;
+  task_id?: string;
   document_count: number;
   language: string;
   theme: string;
@@ -91,6 +92,27 @@ export interface ChatResponse {
   response: string;
   session_id: string;
   timestamp: number;
+  sources?: SourceInfo[];
+  search_type?: "rag" | "realtime";
+}
+
+export interface SourceInfo {
+  title: string;
+  url?: string;
+  snippet?: string;
+}
+
+export interface AttractionsResponse {
+  attractions: Attraction[];
+  total: number;
+}
+
+export interface Attraction {
+  id: string;
+  name: string;
+  category: string;
+  description: string;
+  content?: string;
 }
 
 class ApiError extends Error {
@@ -159,6 +181,11 @@ export const api = {
   // Get task by ID
   async getTask(id: string): Promise<AgentTask> {
     return fetchApi<AgentTask>(`/api/v1/tasks/${id}`);
+  },
+
+  // Get task by agent ID
+  async getTaskByAgent(agentId: string): Promise<AgentTask> {
+    return fetchApi<AgentTask>(`/api/v1/agents/${agentId}/task`);
   },
 
   // Create task for agent
@@ -236,12 +263,10 @@ export const api = {
   },
 
   // Streaming chat
-  async *chatStream(data: ChatRequest): AsyncGenerator<string> {
-    const url = `${API_BASE_URL}/api/v1/chat/stream`;
+  async *chatStream(agentId: string, data: ChatRequest): AsyncGenerator<string> {
+    const url = `${API_BASE_URL}/api/v1/agents/${agentId}/chat/stream?message=${encodeURIComponent(data.message)}`;
     const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
+      method: 'GET',
     });
 
     if (!response.ok) {
@@ -270,6 +295,11 @@ export const api = {
         }
       }
     }
+  },
+
+  // Get attractions from agent's knowledge base
+  async getAttractions(agentId: string): Promise<AttractionsResponse> {
+    return fetchApi<AttractionsResponse>(`/api/v1/agents/${agentId}/attractions`);
   },
 };
 

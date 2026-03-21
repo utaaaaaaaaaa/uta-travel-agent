@@ -9,19 +9,27 @@ import (
 	"strings"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/utaaa/uta-travel-agent/internal/agent"
 	"github.com/utaaa/uta-travel-agent/internal/grpc/clients"
 	"github.com/utaaa/uta-travel-agent/internal/llm"
+	"github.com/utaaa/uta-travel-agent/internal/mcp/mcpclient"
 	"github.com/utaaa/uta-travel-agent/internal/rag"
 	"github.com/utaaa/uta-travel-agent/internal/router"
 	"github.com/utaaa/uta-travel-agent/internal/scheduler"
 	"github.com/utaaa/uta-travel-agent/internal/storage/postgres"
 	"github.com/utaaa/uta-travel-agent/internal/storage/qdrant"
+	"github.com/utaaa/uta-travel-agent/internal/tools"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
 func main() {
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Printf("Warning: .env file not found, using system environment variables")
+	}
+
 	log.Println("Starting UTA Travel Agent Orchestrator...")
 
 	// Load configuration
@@ -167,20 +175,81 @@ func main() {
 		log.Println("Indexer tools registered")
 	}
 
-	// Register mock tools for research and web reading
-	braveSearchTool := agent.NewBraveSearchTool("") // API key can be configured later
+	// Register search tools (Wikipedia, Tavily, WebReader, BaiduBaike)
+	// Use proxy if configured
+	proxyURL := cfg.HTTPProxy
+	if proxyURL == "" {
+		proxyURL = cfg.HTTPSProxy
+	}
+
+	// Wikipedia Search Tool - for authoritative static knowledge
+	wikiTool := tools.NewWikipediaSearchToolWithProxy("zh", proxyURL)
 	toolRegistry.Register(agent.Tool{
-		Name:        "brave_search",
+		Name:        wikiTool.GetName(),
 		Type:        agent.ToolTypeMCP,
-		Description: "Search the web for information",
-		Parameters: map[string]any{
-			"query": map[string]any{
-				"type":        "string",
-				"description": "The search query",
-			},
-		},
-		Required: true,
-	}, braveSearchTool)
+		Description: wikiTool.GetDescription(),
+		Parameters:  wikiTool.GetParameters(),
+	}, &toolExecutorAdapter{impl: wikiTool})
+	log.Println("Wikipedia search tool registered")
+
+	// Baidu Baike Search Tool - for Chinese encyclopedic content
+	baikeTool := tools.NewBaiduBaikeSearchToolWithProxy(proxyURL)
+	toolRegistry.Register(agent.Tool{
+		Name:        baikeTool.GetName(),
+		Type:        agent.ToolTypeMCP,
+		Description: baikeTool.GetDescription(),
+		Parameters:  baikeTool.GetParameters(),
+	}, &toolExecutorAdapter{impl: baikeTool})
+	log.Println("Baidu Baike search tool registered")
+
+	// Tavily Search Tool - for real-time information (prices, weather, etc.)
+	if cfg.TavilyAPIKey != "" {
+		// Check if MCP mode is requested
+		if cfg.TavilyMode == "mcp" {
+			// Use new simplified MCP client
+			mcpTool := mcpclient.NewMCPTool(mcpclient.HTTPConfig{
+				URL:    fmt.Sprintf("https://mcp.tavily.com/mcp/?tavilyApiKey=%s", cfg.TavilyAPIKey),
+				Proxy:  proxyURL,
+			})
+			// Auto-discover and register tools
+			if err := mcpclient.DiscoverAndRegisterTools(context.Background(), toolRegistry, mcpTool); err != nil {
+				log.Printf("Warning: Failed to register Tavily MCP tools: %v", err)
+				// Fallback to API mode
+				tavilyTool := tools.NewTavilySearchToolWithProxy(cfg.TavilyAPIKey, proxyURL)
+				toolRegistry.Register(agent.Tool{
+					Name:        tavilyTool.GetName(),
+					Type:        agent.ToolTypeMCP,
+					Description: tavilyTool.GetDescription(),
+					Parameters:  tavilyTool.GetParameters(),
+				}, &toolExecutorAdapter{impl: tavilyTool})
+				log.Println("Tavily search tool registered (API mode - fallback)")
+			} else {
+				log.Println("Tavily search tool registered (MCP mode)")
+			}
+		} else {
+			// API mode (default)
+			tavilyTool := tools.NewTavilySearchToolWithProxy(cfg.TavilyAPIKey, proxyURL)
+			toolRegistry.Register(agent.Tool{
+				Name:        tavilyTool.GetName(),
+				Type:        agent.ToolTypeMCP,
+				Description: tavilyTool.GetDescription(),
+				Parameters:  tavilyTool.GetParameters(),
+			}, &toolExecutorAdapter{impl: tavilyTool})
+			log.Println("Tavily search tool registered (API mode)")
+		}
+	} else {
+		log.Println("Warning: TAVILY_API_KEY not set, real-time search unavailable")
+	}
+
+	// Web Reader Tool - for reading specific pages
+	webReaderTool := tools.NewWebReaderToolWithProxy(proxyURL)
+	toolRegistry.Register(agent.Tool{
+		Name:        webReaderTool.GetName(),
+		Type:        agent.ToolTypeMCP,
+		Description: webReaderTool.GetDescription(),
+		Parameters:  webReaderTool.GetParameters(),
+	}, &toolExecutorAdapter{impl: webReaderTool})
+	log.Println("Web reader tool registered")
 
 	// LLM Summarize Tool
 	llmSummarizeTool := &LLMSummarizeToolAdapter{
@@ -333,24 +402,74 @@ func main() {
 		} else {
 			log.Printf("Loaded %d agents from database", len(registry.List()))
 		}
+
+		// Create default agent if not exists
+		if _, exists := registry.Get("default"); !exists {
+			defaultAgent := &agent.DestinationAgent{
+				ID:          "default",
+				UserID:      "system",
+				Name:        "UTA Travel Assistant",
+				Description: "Default travel assistant for general questions",
+				Destination: "通用",
+				Theme:       "general",
+				Language:    "zh",
+				Status:      agent.StatusReady,
+				Tags:        []string{"travel", "assistant", "general"},
+				CreatedAt:   time.Now(),
+				UpdatedAt:   time.Now(),
+			}
+			if err := registry.Register(defaultAgent); err != nil {
+				log.Printf("Warning: Failed to create default agent: %v", err)
+			} else {
+				log.Println("Created default travel assistant agent")
+			}
+		}
 	} else {
 		registry = agent.NewRegistry()
+		// Create default agent in memory
+		defaultAgent := &agent.DestinationAgent{
+			ID:          "default",
+			UserID:      "system",
+			Name:        "UTA Travel Assistant",
+			Description: "Default travel assistant for general questions",
+			Destination: "通用",
+			Theme:       "general",
+			Language:    "zh",
+			Status:      agent.StatusReady,
+			Tags:        []string{"travel", "assistant", "general"},
+			CreatedAt:   time.Now(),
+			UpdatedAt:   time.Now(),
+		}
+		registry.Register(defaultAgent)
 		log.Println("Using in-memory registry (no persistence)")
 	}
 
 	// Initialize agent factory (will be used for agent creation)
-	_ = agent.NewAgentFactory(templateRegistry, toolRegistry, llmProvider)
+	factory := agent.NewAgentFactory(templateRegistry, toolRegistry, llmProvider)
 	log.Println("Agent factory initialized")
+
+	// Create MainAgent for general chat
+	mainAgent, err := factory.CreateMainAgentWithSubagents()
+	if err != nil {
+		log.Printf("Warning: Failed to create main agent: %v", err)
+	} else {
+		// Set tool registry for all subagents
+		mainAgent.SetAllSubagentTools(toolRegistry)
+		log.Println("MainAgent initialized with subagents")
+	}
 
 	// Initialize scheduler
 	sched := scheduler.NewScheduler(registry)
 
 	// Initialize router with all services
 	r := router.NewRouter(router.RouterConfig{
-		Registry:  registry,
-		Scheduler: sched,
-		LLMClient: llmProvider,
-		RAGSvc:    ragSvc,
+		Registry:     registry,
+		Scheduler:    sched,
+		LLMClient:    llmProvider,
+		RAGSvc:       ragSvc,
+		MainAgent:    mainAgent,
+		ToolRegistry: toolRegistry,
+		TavilyAPIKey: cfg.TavilyAPIKey,
 	})
 
 	// Get port from environment
@@ -533,5 +652,26 @@ func (a *LLMSummarizeToolAdapter) Execute(ctx context.Context, params map[string
 			"original_length": len(content),
 			"summary_length":  len(response.Content),
 		},
+	}, nil
+}
+
+// toolExecutorAdapter adapts tools.Tool interface to agent.ToolExecutor
+type toolExecutorAdapter struct {
+	impl interface {
+		Execute(ctx context.Context, params map[string]any) (map[string]any, error)
+	}
+}
+
+func (a *toolExecutorAdapter) Execute(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+	result, err := a.impl.Execute(ctx, params)
+	if err != nil {
+		return &agent.ToolResult{
+			Success: false,
+			Error:   err.Error(),
+		}, nil
+	}
+	return &agent.ToolResult{
+		Success: true,
+		Data:    result,
 	}, nil
 }

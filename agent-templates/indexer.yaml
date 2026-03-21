@@ -1,36 +1,47 @@
 # Indexer Agent Template
 # 索引构建员 Agent，负责将知识向量化并构建检索索引
+# Multi-Agent 架构中的索引节点，在 Curator 确认质量后启动
 
 kind: AgentTemplate
 apiVersion: agent.uta/v1
 
 metadata:
   name: indexer
-  version: v1.0.0
+  version: v2.0.0
   description: |
-    Indexer Agent 负责将结构化知识向量化并构建 RAG 检索索引。
-    它会决定分块策略、生成向量、存储到向量数据库。
+    Indexer Agent 是 Multi-Agent 架构中的索引节点。
+    在 Curator 确认质量达标后启动，负责：
+    - 文档分块
+    - 向量索引构建
+    - 索引质量验证
 
 spec:
   # Agent 角色定义
   role: |
-    你是一个知识索引构建员。你的职责是将结构化的旅游知识转化为可检索的向量索引。
+    你是一个知识索引构建员，负责将收集的旅游知识转化为可检索的向量索引。
 
-    你的工作包括：
-    1. 文档分块：根据内容特点选择合适的分块策略
-    2. 向量生成：调用 Embedding 服务将文本转化为向量
-    3. 索引构建：将向量和元数据存储到向量数据库
-    4. 质量验证：验证索引的完整性和检索效果
+    ## 工作时机
+    当 Curator Agent 确认质量达标后启动。
 
-    分块策略决策：
+    ## 主要职责
+    1. **文档分块**: 根据语义边界切分文档
+    2. **向量生成**: 调用 Embedding 服务生成向量
+    3. **索引构建**: 存储到 Qdrant 向量数据库
+    4. **质量验证**: 验证索引效果
+
+    ## 分块策略
+    - chunk_size: 500-1000 字符
+    - overlap: 50-100 字符
+    - 每块包含完整语义单元
+
+    ## 分块决策
     - 景点描述：保持完整性，一个景点一个 chunk
     - 交通指南：按路线或方式分块
     - 美食推荐：按区域或类型分块
     - 注意事项：按主题分块
 
-    工作原则：
+    ## 工作原则
     - 保持语义完整性
-    - 合理的 chunk 大小（256-512 tokens）
     - 保留足够的上下文
     - 记录分块元数据
 
@@ -44,34 +55,50 @@ spec:
   # 可用工具
   tools:
     mcp:
-      - name: qdrant
-        description: 向量数据库操作
+      - name: build_knowledge_index
+        description: 构建知识索引工具
         required: true
-    skills:
-      - build_knowledge_index # 构建知识索引
     services:
-      - embedding             # Embedding 服务
-      - llm_gateway           # LLM 服务（用于分块决策）
+      - embedding             # Embedding gRPC 服务
+      - qdrant               # Qdrant 向量数据库
 
   # 决策配置
   decision:
-    model: claude-haiku-3-5
+    model: deepseek-chat
     temperature: 0.1
-    max_iterations: 15
+    max_iterations: 2         # 最多2轮（索引构建通常一次成功）
     timeout: 300s
+
+    # 停止条件
+    stopConditions:
+      - type: index_success
+        description: 索引成功构建
+      - type: max_iterations
+        value: 2
+        description: 达到最大轮次
+
+  # 状态机
+  states:
+    - idle                    # 空闲
+    - chunking               # 分块中
+    - embedding              # 向量化中
+    - indexing               # 索引中
+    - validating             # 验证中
+    - completed              # 完成
+    - error                  # 错误
 
   # 索引配置
   indexConfig:
-    vectorSize: 768           # 向量维度
+    vectorSize: 768           # 向量维度 (local BGE model)
     distanceMetric: cosine    # 距离度量
-    chunkSize: 384            # 默认分块大小
+    chunkSize: 500            # 默认分块大小
     chunkOverlap: 50          # 分块重叠
     minChunkSize: 100         # 最小分块大小
 
   # 输入来源
   inputSource:
-    from: curator
-    format: structured_knowledge
+    from: shared_state        # 从共享状态读取高质量文档
+    format: documents
 
   # 输出格式
   outputFormat:
@@ -79,21 +106,28 @@ spec:
     schema:
       type: object
       properties:
-        collection_name:
+        collection_id:
           type: string
-          description: 向量集合名称
-        statistics:
-          type: object
-          properties:
-            total_chunks: { type: integer }
-            total_vectors: { type: integer }
-            categories: { type: object }
-        index_status:
-          type: string
-          enum: [created, updated, failed]
-        collection_info:
-          type: object
-          properties:
-            vector_size: { type: integer }
-            points_count: { type: integer }
-            status: { type: string }
+          description: 向量集合 ID
+        total_chunks:
+          type: integer
+          description: 总分块数
+        embedding_dimension:
+          type: integer
+          description: 向量维度
+        indexing_time_ms:
+          type: integer
+          description: 索引耗时
+        is_complete:
+          type: boolean
+          description: 是否完成
+
+  # Multi-Agent 配置
+  multiAgent:
+    sharedState: SharedKnowledgeState
+    triggerCondition: curator_quality_passed
+    input:
+      - high_quality_documents  # Curator 标记的高质量文档
+    output:
+      - collection_id           # 创建的集合 ID
+      - index_status            # 索引状态

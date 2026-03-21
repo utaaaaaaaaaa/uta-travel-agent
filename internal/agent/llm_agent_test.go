@@ -11,6 +11,73 @@ import (
 	"github.com/utaaa/uta-travel-agent/internal/llm"
 )
 
+// MockToolRegistry is a mock implementation of ToolRegistry
+type MockToolRegistry struct {
+	tools     map[string]Tool
+	executors map[string]ToolExecutor
+	results   map[string]*ToolResult
+	errors    map[string]error
+	callCount map[string]int
+}
+
+func NewMockToolRegistry() *MockToolRegistry {
+	return &MockToolRegistry{
+		tools:     make(map[string]Tool),
+		executors: make(map[string]ToolExecutor),
+		results:   make(map[string]*ToolResult),
+		errors:    make(map[string]error),
+		callCount: make(map[string]int),
+	}
+}
+
+func (m *MockToolRegistry) Register(tool Tool, executor ToolExecutor) error {
+	m.tools[tool.Name] = tool
+	m.executors[tool.Name] = executor
+	return nil
+}
+
+func (m *MockToolRegistry) Get(toolName string) (Tool, bool) {
+	tool, exists := m.tools[toolName]
+	return tool, exists
+}
+
+func (m *MockToolRegistry) Execute(ctx context.Context, toolName string, params map[string]any) (*ToolResult, error) {
+	m.callCount[toolName]++
+	if err, exists := m.errors[toolName]; exists && err != nil {
+		return nil, err
+	}
+	if result, exists := m.results[toolName]; exists {
+		return result, nil
+	}
+	if executor, exists := m.executors[toolName]; exists && executor != nil {
+		return executor.Execute(ctx, params)
+	}
+	return nil, errors.New("tool not found: " + toolName)
+}
+
+func (m *MockToolRegistry) ListTools() []Tool {
+	tools := make([]Tool, 0, len(m.tools))
+	for _, tool := range m.tools {
+		tools = append(tools, tool)
+	}
+	return tools
+}
+
+// SetResult sets a mock result for a tool
+func (m *MockToolRegistry) SetResult(toolName string, result *ToolResult) {
+	m.results[toolName] = result
+}
+
+// SetError sets a mock error for a tool
+func (m *MockToolRegistry) SetError(toolName string, err error) {
+	m.errors[toolName] = err
+}
+
+// GetCallCount returns the number of times a tool was called
+func (m *MockToolRegistry) GetCallCount(toolName string) int {
+	return m.callCount[toolName]
+}
+
 // MockLLMProvider is a mock implementation of llm.Provider
 type MockLLMProvider struct {
 	responses []*llm.Response
@@ -395,7 +462,7 @@ func TestSubagentPromptRetrieval(t *testing.T) {
 		{AgentTypeIndexer, true},
 		{AgentTypeGuide, true},
 		{AgentTypePlanner, true},
-		{AgentTypeMain, false},
+		{AgentTypeMain, true}, // MainAgent now has its own prompt
 	}
 
 	for _, tt := range tests {

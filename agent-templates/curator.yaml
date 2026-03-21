@@ -1,65 +1,91 @@
 # Curator Agent Template
-# 知识策展人 Agent，负责整理和结构化收集的信息
+# 知识策展人 Agent，负责整理和评估收集的信息
+# Multi-Agent 架构中的质量评估节点
 
 kind: AgentTemplate
 apiVersion: agent.uta/v1
 
 metadata:
   name: curator
-  version: v1.0.0
+  version: v2.0.0
   description: |
-    Curator Agent 负责将 Researcher 收集的原始信息整理为结构化的知识库。
-    它会对信息进行分类、打标签、建立关联、去除重复。
+    Curator Agent 是 Multi-Agent 架构中的质量评估节点。
+    在所有 Researcher 完成后启动，负责：
+    - 评估文档质量
+    - 识别重复内容
+    - 判断是否需要补充搜索
+    - 标注高质量文档
 
 spec:
   # Agent 角色定义
   role: |
-    你是一个知识策展人。你的职责是将收集到的原始旅游信息整理为结构化的知识库。
+    你是一个知识策展人，负责评估 Researcher Agents 收集的信息质量。
 
-    你的工作包括：
-    1. 分类整理：将信息按类型、区域、主题等维度分类
-    2. 标签管理：为每个景点/项目添加适当的标签
-    3. 关联建立：建立景点之间的关系（如地理位置、游览顺序）
-    4. 去重合并：合并重复信息，保留最完整的版本
-    5. 质量检查：检查信息的完整性和一致性
-    6. 知识图谱：构建简单的知识关系网络
+    ## 工作时机
+    当所有 Researcher Agent 完成后启动。
 
-    工作原则：
-    - 保持信息的准确性和一致性
-    - 建立清晰的结构便于后续检索
-    - 保留原始来源的可追溯性
+    ## 主要职责
+    1. **质量评估**: 为每篇文档打分 (0-1)
+    2. **重复识别**: 找出重复或相似内容
+    3. **完整性判断**: 检查主题覆盖是否完整
+    4. **补充决策**: 决定是否需要补充搜索
+
+    ## 质量评估标准
+    - 准确性: 信息是否具体、可验证
+    - 完整性: 是否覆盖主题的关键信息
+    - 时效性: 信息是否仍然有效
+    - 来源可靠性: 来源是否权威
+
+    ## 迭代机制
+    - 最大轮次: 3轮
+    - 终止条件: 整体质量 ≥ 0.7 或 连续2轮无改进
+    - 可请求 MainAgent 调度补充搜索
 
   # 能力声明
   capabilities:
-    - categorize              # 分类整理
-    - tag                     # 标签管理
-    - deduplicate             # 去重合并
-    - validate                # 质量检查
-    - build_graph             # 构建知识图谱
+    - evaluate_quality         # 质量评估
+    - detect_duplicates        # 重复检测
+    - check_coverage          # 覆盖检查
+    - request_supplement      # 请求补充
 
   # 可用工具
   tools:
-    mcp:
-      - name: filesystem
-        description: 读取原始数据文件
-        required: true
-    skills:
-      - build_knowledge_base  # 构建知识库
-      - categorize_info       # 分类信息
     services:
-      - llm_gateway           # LLM 服务（用于分类和打标签）
+      - llm_gateway           # LLM 服务（用于质量评估）
 
   # 决策配置
   decision:
-    model: claude-sonnet-4-6
+    model: deepseek-chat
     temperature: 0.1
-    max_iterations: 20
-    timeout: 300s
+    max_iterations: 3
+    timeout: 120s
+
+    # 停止条件
+    stopConditions:
+      - type: quality_threshold
+        value: 0.7
+        description: 整体质量达到阈值
+      - type: no_improvement
+        value: 2
+        description: 连续2轮无改进
+      - type: max_iterations
+        value: 3
+        description: 达到最大轮次
+
+  # 状态机
+  states:
+    - idle                    # 空闲
+    - evaluating              # 评估中
+    - deduplicating           # 去重中
+    - reporting               # 汇报中
+    - requesting_supplement   # 请求补充
+    - completed               # 完成
+    - error                   # 错误
 
   # 输入来源
   inputSource:
-    from: researcher
-    format: structured_data
+    from: shared_state        # 从共享状态读取
+    format: documents
 
   # 输出格式
   outputFormat:
@@ -67,47 +93,35 @@ spec:
     schema:
       type: object
       properties:
-        knowledge_base:
-          type: object
-          description: 结构化的知识库
-          properties:
-            categories:
-              type: object
-              additionalProperties:
-                type: array
-                items:
-                  $ref: "#/definitions/KnowledgeItem"
-            tags:
-              type: array
-              items:
-                type: string
-            relations:
-              type: array
-              items:
-                $ref: "#/definitions/Relation"
-            statistics:
-              type: object
-              properties:
-                total_items: { type: integer }
-                categories_count: { type: integer }
-                tags_count: { type: integer }
+        quality_score:
+          type: number
+          description: 整体质量分数 (0-1)
+        documents_evaluated:
+          type: integer
+          description: 评估的文档数
+        high_quality_count:
+          type: integer
+          description: 高质量文档数
+        duplicates_found:
+          type: integer
+          description: 发现的重复数
+        needs_more_search:
+          type: boolean
+          description: 是否需要补充搜索
+        missing_aspects:
+          type: array
+          items:
+            type: string
+          description: 缺失的方面
+        is_complete:
+          type: boolean
+          description: 是否完成
 
-  definitions:
-    KnowledgeItem:
-      type: object
-      properties:
-        id: { type: string }
-        name: { type: string }
-        category: { type: string }
-        tags: { type: array, items: { type: string } }
-        content: { type: string }
-        metadata: { type: object }
-        relations: { type: array, items: { type: string } }
-
-    Relation:
-      type: object
-      properties:
-        from: { type: string }
-        to: { type: string }
-        type: { type: string }
-        description: { type: string }
+  # Multi-Agent 配置
+  multiAgent:
+    sharedState: SharedKnowledgeState
+    triggerCondition: all_researchers_complete
+    output:
+      - quality_scores        # 文档质量分数
+      - duplicate_groups      # 重复文档组
+      - supplement_requests   # 补充搜索请求

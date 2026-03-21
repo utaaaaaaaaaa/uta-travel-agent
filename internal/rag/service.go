@@ -232,3 +232,108 @@ func truncate(s string, maxLen int) string {
 	}
 	return s[:maxLen] + "..."
 }
+
+// GetAttractions retrieves attraction information from the knowledge base
+func (s *Service) GetAttractions(ctx context.Context, collectionID string, limit int) ([]map[string]interface{}, error) {
+	if s.qdrantClient == nil {
+		return nil, fmt.Errorf("qdrant client not configured")
+	}
+
+	// Use a generic query to find attractions
+	attractionQueries := []string{
+		"景点 景胜 旅游胜地",
+		"寺庙 神社 教堂",
+		"博物馆 美术馆",
+		"公园 自然景观",
+	}
+
+	allResults := make([]map[string]interface{}, 0)
+	seenNames := make(map[string]bool)
+
+	for _, query := range attractionQueries {
+		// Get embedding for query
+		queryVector, err := s.Embed(ctx, query)
+		if err != nil {
+			continue
+		}
+
+		// Search
+		results, err := s.qdrantClient.Search(ctx, collectionID, queryVector, 5)
+		if err != nil {
+			continue
+		}
+
+		for _, result := range results {
+			// Extract attraction info from payload
+			name := extractAttractionName(result.Payload)
+			if name == "" || seenNames[name] {
+				continue
+			}
+			seenNames[name] = true
+
+			content := extractContent(result.Payload)
+			attraction := map[string]interface{}{
+				"name":        name,
+				"description": truncate(content, 300),
+				"score":       result.Score,
+			}
+
+			// Add metadata if available
+			if url, ok := result.Payload["url"].(string); ok {
+				attraction["url"] = url
+			}
+			if title, ok := result.Payload["title"].(string); ok {
+				attraction["title"] = title
+			}
+
+			allResults = append(allResults, attraction)
+		}
+
+		if len(allResults) >= limit {
+			break
+		}
+	}
+
+	// Sort by score and limit
+	if len(allResults) > limit {
+		allResults = allResults[:limit]
+	}
+
+	return allResults, nil
+}
+
+// extractAttractionName tries to extract an attraction name from payload
+func extractAttractionName(payload map[string]interface{}) string {
+	if payload == nil {
+		return ""
+	}
+
+	// Try title field first
+	if title, ok := payload["title"].(string); ok && title != "" {
+		return title
+	}
+
+	// Try to extract from content
+	content := extractContent(payload)
+	if content == "" {
+		return ""
+	}
+
+	// Try to find a name pattern (first sentence or line)
+	lines := strings.Split(content, "\n")
+	if len(lines) > 0 {
+		firstLine := strings.TrimSpace(lines[0])
+		// If first line is short enough, use as name
+		if len(firstLine) > 0 && len(firstLine) < 50 {
+			// Remove common prefixes
+			for _, prefix := range []string{"是", "位于", "名为"} {
+				if idx := strings.Index(firstLine, prefix); idx > 0 {
+					return strings.TrimSpace(firstLine[:idx])
+				}
+			}
+			return firstLine
+		}
+	}
+
+	return ""
+}

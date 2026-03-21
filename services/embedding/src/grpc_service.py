@@ -104,10 +104,18 @@ class EmbeddingServiceServicer(embedding_pb2_grpc.EmbeddingServiceServicer):
 class EmbeddingGRPCServer:
     """Embedding gRPC Server wrapper."""
 
-    def __init__(self, host: str = "0.0.0.0", port: int = 50062):
+    def __init__(self, host: str = "0.0.0.0", port: int = 50052):
         self.host = host
         self.port = port
-        self.service = EmbeddingService(Settings())
+        # Use local model path if available, otherwise use settings
+        import os
+        local_model_path = "/home/utaaa/uta-travel-agent/services/embedding/models/paraphrase-multilingual-MiniLM-L12-v2"
+        if os.path.exists(local_model_path):
+            settings = Settings(model_name=local_model_path)
+            logger.info(f"Using local model: {local_model_path}")
+        else:
+            settings = Settings()
+        self.service = EmbeddingService(settings)
         self._server = None
 
     async def start(self):

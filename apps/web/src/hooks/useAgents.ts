@@ -7,7 +7,7 @@
 import { useState, useCallback } from 'react';
 import { api, ChatResponse, CreateAgentRequest, CreateAgentResponse } from '@/lib/api/client';
 
-export function useChat() {
+export function useChat(agentId: string = 'default') {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -16,7 +16,7 @@ export function useChat() {
     setLoading(true);
     setError(null);
     try {
-      const response: ChatResponse = await api.chat(sessionId || 'default', {
+      const response: ChatResponse = await api.chat(agentId, {
         message,
         session_id: sessionId || undefined,
       });
@@ -29,14 +29,14 @@ export function useChat() {
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [agentId, sessionId]);
 
   const chatStream = useCallback(async function* (message: string): AsyncGenerator<string> {
     setLoading(true);
     setError(null);
 
     try {
-      for await (const chunk of api.chatStream({
+      for await (const chunk of api.chatStream(agentId, {
         message,
         session_id: sessionId || undefined,
       })) {
@@ -49,7 +49,7 @@ export function useChat() {
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [agentId, sessionId]);
 
   const clearSession = useCallback(() => {
     setSessionId(null);

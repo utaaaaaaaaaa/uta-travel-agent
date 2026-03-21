@@ -327,6 +327,178 @@ func (a *MainAgent) SetSubagentTools(agentType AgentType, registry ToolRegistry)
 	return fmt.Errorf("subagent %s does not support SetTools", agentType)
 }
 
+// RunParallelResearch runs multiple researcher agents in parallel
+// Each researcher focuses on a different topic (attractions, food, culture, etc.)
+func (a *MainAgent) RunParallelResearch(ctx context.Context, destination, theme string, onProgress func(string)) (*ParallelResearchResult, error) {
+	startTime := time.Now()
+	a.SetState(StateRunning)
+	defer a.SetState(StateIdle)
+
+	// Define research topics based on theme
+	topics := a.getResearchTopics(destination, theme)
+
+	// Create channels for results
+	resultCh := make(chan *ResearchTopicResult, len(topics))
+	errCh := make(chan error, len(topics))
+
+	// Launch parallel research
+	for _, topic := range topics {
+		go func(t ResearchTopic) {
+			result := a.researchTopic(ctx, t)
+			if result.Error != nil {
+				errCh <- result.Error
+			} else {
+				resultCh <- result
+			}
+		}(topic)
+	}
+
+	// Collect results
+	results := make([]*ResearchTopicResult, 0, len(topics))
+	var errors []error
+
+	for i := 0; i < len(topics); i++ {
+		select {
+		case result := <-resultCh:
+			results = append(results, result)
+			if onProgress != nil {
+				onProgress(fmt.Sprintf("完成 %s 的研究 (%d/%d)", result.Topic.Name, len(results), len(topics)))
+			}
+		case err := <-errCh:
+			errors = append(errors, err)
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+
+	// Merge all documents
+	allDocs := make([]map[string]any, 0)
+	for _, r := range results {
+		allDocs = append(allDocs, r.Documents...)
+	}
+
+	return &ParallelResearchResult{
+		Destination:    destination,
+		Theme:          theme,
+		Topics:         results,
+		TotalDocuments: len(allDocs),
+		AllDocuments:   allDocs,
+		Errors:         errors,
+		Duration:       time.Since(startTime),
+	}, nil
+}
+
+// ResearchTopic defines a research topic
+type ResearchTopic struct {
+	Name        string
+	Query       string
+	Description string
+}
+
+// ResearchTopicResult holds results for a single topic
+type ResearchTopicResult struct {
+	Topic     ResearchTopic
+	Documents []map[string]any
+	Error     error
+}
+
+// ParallelResearchResult holds results from parallel research
+type ParallelResearchResult struct {
+	Destination    string
+	Theme          string
+	Topics         []*ResearchTopicResult
+	TotalDocuments int
+	AllDocuments   []map[string]any
+	Errors         []error
+	Duration       time.Duration
+}
+
+// getResearchTopics returns research topics based on destination and theme
+func (a *MainAgent) getResearchTopics(destination, theme string) []ResearchTopic {
+	// Base topics for all destinations
+	topics := []ResearchTopic{
+		{
+			Name:        "景点",
+			Query:       fmt.Sprintf("%s 景点 旅游", destination),
+			Description: "主要景点和名胜",
+		},
+		{
+			Name:        "历史与文化",
+			Query:       fmt.Sprintf("%s 历史 文化", destination),
+			Description: "历史背景和文化特色",
+		},
+		{
+			Name:        "美食",
+			Query:       fmt.Sprintf("%s 美食 特色", destination),
+			Description: "当地美食和特色菜肴",
+		},
+	}
+
+	// Add theme-specific topics
+	switch theme {
+	case "cultural":
+		topics = append(topics, ResearchTopic{
+			Name:        "文化景点",
+			Query:       fmt.Sprintf("%s 寺庙 博物馆 世界遗产", destination),
+			Description: "寺庙、博物馆、文化景点",
+		})
+	case "food":
+		topics = append(topics, ResearchTopic{
+			Name:        "美食推荐",
+			Query:       fmt.Sprintf("%s 餐厅 小吃 市场", destination),
+			Description: "餐厅、小吃、美食市场",
+		})
+	case "adventure":
+		topics = append(topics, ResearchTopic{
+			Name:        "户外活动",
+			Query:       fmt.Sprintf("%s 徒步 自然 公园", destination),
+			Description: "徒步、自然景观、户外活动",
+		})
+	case "art":
+		topics = append(topics, ResearchTopic{
+			Name:        "艺术场所",
+			Query:       fmt.Sprintf("%s 美术馆 画廊 艺术", destination),
+			Description: "美术馆、画廊、艺术展览",
+		})
+	}
+
+	return topics
+}
+
+// researchTopic executes research for a single topic
+func (a *MainAgent) researchTopic(ctx context.Context, topic ResearchTopic) *ResearchTopicResult {
+	result := &ResearchTopicResult{
+		Topic: topic,
+	}
+
+	// Get researcher subagent
+	researcher, exists := a.GetSubagent(AgentTypeResearcher)
+	if !exists {
+		result.Error = fmt.Errorf("researcher subagent not found")
+		return result
+	}
+
+	// Run researcher with topic query
+	agentResult, err := researcher.Run(ctx, topic.Query)
+	if err != nil {
+		result.Error = err
+		return result
+	}
+
+	// Extract documents from result
+	if agentResult != nil && agentResult.Output != nil {
+		if docs, ok := agentResult.Output.([]map[string]any); ok {
+			result.Documents = docs
+		} else if outputMap, ok := agentResult.Output.(map[string]any); ok {
+			if docs, ok := outputMap["documents"].([]map[string]any); ok {
+				result.Documents = docs
+			}
+		}
+	}
+
+	return result
+}
+
 // SetAllSubagentTools sets the tool registry for all registered subagents
 func (a *MainAgent) SetAllSubagentTools(registry ToolRegistry) {
 	a.mu.Lock()
@@ -360,6 +532,9 @@ type ExecutionStep struct {
 	AgentType AgentType `json:"agent_type"`
 	Goal      string    `json:"goal"`
 	Required  bool      `json:"required"`
+	// ParallelSteps allows running multiple subagents in parallel
+	// Each step in this slice will be executed concurrently
+	ParallelSteps []ExecutionStep `json:"parallel_steps,omitempty"`
 }
 
 // planExecution analyzes the goal and creates an execution plan

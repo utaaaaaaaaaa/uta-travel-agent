@@ -30,6 +30,14 @@ type Config struct {
 	DatabasePass string
 	DatabaseName string
 	DatabaseSSL  string
+
+	// Search APIs
+	TavilyAPIKey string
+	TavilyMode   string // "api", "mcp", or "skills"
+
+	// Proxy
+	HTTPProxy  string
+	HTTPSProxy string
 }
 
 // Load loads configuration from environment
@@ -49,6 +57,10 @@ func Load() *Config {
 		DatabasePass:  getEnv("DATABASE_PASSWORD", "postgres"),
 		DatabaseName:  getEnv("DATABASE_NAME", "uta_travel"),
 		DatabaseSSL:   getEnv("DATABASE_SSLMODE", "disable"),
+		TavilyAPIKey:  getEnv("TAVILY_API_KEY", ""),
+		TavilyMode:    getEnv("TAVILY_MODE", "api"),
+		HTTPProxy:     getEnv("HTTP_PROXY", ""),
+		HTTPSProxy:    getEnv("HTTPS_PROXY", ""),
 	}
 }
 

@@ -7,8 +7,13 @@ Provides text embedding capabilities using Sentence Transformers.
 import asyncio
 import hashlib
 import logging
+import os
 from abc import ABC, abstractmethod
 from typing import Optional
+
+# Set offline mode before importing sentence_transformers
+os.environ['HF_HUB_OFFLINE'] = '1'
+os.environ['TRANSFORMERS_OFFLINE'] = '1'
 
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings
@@ -24,7 +29,7 @@ class Settings(BaseSettings):
     port: int = 8002
 
     # Embedding model settings
-    model_name: str = "multilingual"  # preset or full model name
+    model_name: str = "multilingual"  # preset or full model name or local path
     device: Optional[str] = None  # auto-detect if None
     batch_size: int = 32
 
@@ -33,6 +38,7 @@ class Settings(BaseSettings):
 
     class Config:
         env_file = ".env"
+        env_prefix = "EMBEDDING_"  # Allow EMBEDDING_MODEL_NAME env var
 
 
 class EmbedRequest(BaseModel):

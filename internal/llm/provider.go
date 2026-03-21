@@ -330,7 +330,7 @@ func (p *GLMProvider) RAGQuery(ctx context.Context, query, context string, opts 
 
 // Stream generates a streaming completion
 func (p *GLMProvider) Stream(ctx context.Context, messages []Message, opts ...Option) (<-chan StreamChunk, <-chan error) {
-	chunkCh := make(chan StreamChunk)
+	chunkCh := make(chan StreamChunk, 100) // Increased buffer size
 	errCh := make(chan error, 1)
 
 	go func() {
@@ -369,25 +369,52 @@ func (p *GLMProvider) Stream(ctx context.Context, messages []Message, opts ...Op
 			return
 		}
 
-		httpReq, err := http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
-		if err != nil {
-			errCh <- fmt.Errorf("create request: %w", err)
-			return
-		}
+		// Retry logic for transient errors
+		var httpReq *http.Request
+		var resp *http.Response
+		maxRetries := 3
+		retryDelay := 1 * time.Second
 
-		httpReq.Header.Set("Content-Type", "application/json")
-		httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-		httpReq.Header.Set("Accept", "text/event-stream")
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			httpReq, err = http.NewRequestWithContext(ctx, "POST", p.baseURL+"/chat/completions", bytes.NewReader(body))
+			if err != nil {
+				errCh <- fmt.Errorf("create request: %w", err)
+				return
+			}
 
-		resp, err := p.client.Do(httpReq)
-		if err != nil {
-			errCh <- fmt.Errorf("send request: %w", err)
-			return
+			httpReq.Header.Set("Content-Type", "application/json")
+			httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+			httpReq.Header.Set("Accept", "text/event-stream")
+
+			resp, err = p.client.Do(httpReq)
+			if err != nil {
+				if attempt < maxRetries-1 && isRetryableError(err) {
+					select {
+					case <-ctx.Done():
+						errCh <- ctx.Err()
+						return
+					case <-time.After(retryDelay):
+						retryDelay *= 2 // Exponential backoff
+						continue
+					}
+				}
+				errCh <- fmt.Errorf("send request (attempt %d): %w", attempt+1, err)
+				return
+			}
+			break
 		}
 		defer resp.Body.Close()
 
+		// Check HTTP status
+		if resp.StatusCode != http.StatusOK {
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			errCh <- fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(bodyBytes))
+			return
+		}
+
 		reader := resp.Body
-		buf := make([]byte, 4096)
+		buf := make([]byte, 8192) // Increased buffer size
+		var accumulated strings.Builder
 
 		for {
 			n, err := reader.Read(buf)
@@ -395,13 +422,22 @@ func (p *GLMProvider) Stream(ctx context.Context, messages []Message, opts ...Op
 				if err == io.EOF {
 					chunkCh <- StreamChunk{Content: "", Done: true}
 				} else {
-					errCh <- err
+					errCh <- fmt.Errorf("read stream: %w", err)
 				}
 				return
 			}
 
-			data := string(buf[:n])
+			accumulated.Write(buf[:n])
+			data := accumulated.String()
+			accumulated.Reset()
+
 			lines := strings.Split(data, "\n")
+
+			// Keep the last incomplete line for next iteration
+			if !strings.HasSuffix(data, "\n") {
+				accumulated.WriteString(lines[len(lines)-1])
+				lines = lines[:len(lines)-1]
+			}
 
 			for _, line := range lines {
 				line = strings.TrimSpace(line)
@@ -440,4 +476,17 @@ func (p *GLMProvider) Stream(ctx context.Context, messages []Message, opts ...Op
 	}()
 
 	return chunkCh, errCh
+}
+
+// isRetryableError checks if an error is retryable
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := err.Error()
+	// Retry on network timeouts, connection refused, etc.
+	return strings.Contains(errStr, "timeout") ||
+		strings.Contains(errStr, "connection refused") ||
+		strings.Contains(errStr, "EOF") ||
+		strings.Contains(errStr, "reset by peer")
 }

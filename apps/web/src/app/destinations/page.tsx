@@ -4,7 +4,8 @@ import { useState, useEffect } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Plus, MapPin, Globe, Loader2, AlertCircle, RefreshCw } from "lucide-react";
+import { Plus, MapPin, Globe, Loader2, AlertCircle, RefreshCw, Trash2, ArrowLeft } from "lucide-react";
+import { DeleteConfirmModal } from "@/components/ui/delete-confirm-modal";
 
 // API base URL
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8080';
@@ -30,6 +31,12 @@ export default function DestinationsPage() {
   const [agents, setAgents] = useState<Agent[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState<string | null>(null);
+  const [deleteModal, setDeleteModal] = useState<{ open: boolean; agentId: string; agentName: string }>({
+    open: false,
+    agentId: "",
+    agentName: ""
+  });
 
   const fetchAgents = async () => {
     setLoading(true);
@@ -40,12 +47,44 @@ export default function DestinationsPage() {
         throw new Error(`获取列表失败: ${response.status}`);
       }
       const data = await response.json();
-      setAgents(data.agents || []);
+      // Sort by created_at descending (newest first) for consistent order
+      const sortedAgents = (data.agents || []).sort((a: Agent, b: Agent) =>
+        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
+      setAgents(sortedAgents);
     } catch (err) {
       console.error('Failed to fetch agents:', err);
       setError(err instanceof Error ? err.message : '获取 Agent 列表失败');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleDeleteClick = (agentId: string, agentName: string, e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDeleteModal({ open: true, agentId, agentName });
+  };
+
+  const handleDeleteConfirm = async () => {
+    const agentId = deleteModal.agentId;
+    setDeleteModal({ open: false, agentId: "", agentName: "" });
+    setDeleting(agentId);
+
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/v1/agents/${agentId}`, {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        throw new Error(`删除失败: ${response.status}`);
+      }
+      // Remove from local state
+      setAgents(agents.filter(a => a.id !== agentId));
+    } catch (err) {
+      console.error('Failed to delete agent:', err);
+      alert(err instanceof Error ? err.message : '删除失败');
+    } finally {
+      setDeleting(null);
     }
   };
 
@@ -158,8 +197,8 @@ export default function DestinationsPage() {
 
             {/* Agent Cards */}
             {agents.map((agent) => (
-              <Link key={agent.id} href={`/guide/${agent.id}`}>
-                <Card className="h-full cursor-pointer hover:border-primary transition-colors">
+              <Card key={agent.id} className="h-full cursor-pointer hover:border-primary transition-colors relative group">
+                <Link href={`/guide/${agent.id}`} className="block">
                   <CardHeader>
                     <div className="flex items-start justify-between">
                       <div className="h-12 w-12 rounded-lg bg-primary/10 flex items-center justify-center">
@@ -193,8 +232,21 @@ export default function DestinationsPage() {
                       创建于 {formatDate(agent.created_at)}
                     </p>
                   </CardContent>
-                </Card>
-              </Link>
+                </Link>
+                {/* Delete Button */}
+                <button
+                  onClick={(e) => handleDeleteClick(agent.id, agent.name || agent.destination, e)}
+                  disabled={deleting === agent.id}
+                  className="absolute top-3 right-3 p-2 rounded-full bg-background/80 hover:bg-destructive/10 hover:text-destructive opacity-0 group-hover:opacity-100 transition-all disabled:opacity-50"
+                  title="删除 Agent"
+                >
+                  {deleting === agent.id ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-4 w-4" />
+                  )}
+                </button>
+              </Card>
             ))}
           </div>
         )}
@@ -218,6 +270,14 @@ export default function DestinationsPage() {
           </div>
         )}
       </main>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={deleteModal.open}
+        agentName={deleteModal.agentName}
+        onConfirm={handleDeleteConfirm}
+        onCancel={() => setDeleteModal({ open: false, agentId: "", agentName: "" })}
+      />
     </div>
   );
 }
