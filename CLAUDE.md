@@ -155,4 +155,26 @@ apps/web/src/app/
 | 版本 | 内容 | 日期 |
 |------|------|------|
 | v0.4.0-alpha | Docker 部署 + LLMAgent + 持久化 | 2026-03-20 |
-| v0.5.0-alpha | 真实工具 + RAG 导游 + 实时搜索 | 2026-03-20 |
+| v0.5.0-alpha | 真实工具 + RAG 导游 + 实时搜索 + Skills 系统 | 2026-03-21 |
+| v0.6.0-alpha | Session-based Agents + 多会话前端 + 上下文工程 | 计划中 |
+
+---
+
+## v0.6.0-alpha 开发计划 - 🚧 计划中
+
+**目标**: Session-based Agent 架构 + ChatGPT 风格多会话前端
+
+详细计划: [docs/roadmap/v0.6.0-alpha.md](docs/roadmap/v0.6.0-alpha.md)
+
+### 核心改进
+
+| 功能 | 描述 |
+|------|------|
+| **Session-based Agents** | MainAgent 和 GuideAgent 支持持久化会话 |
+| **多会话前端** | ChatGPT 风格的侧边栏 + 多会话管理 |
+| **上下文工程** | 自动 Token 管理 + 上下文压缩 |
+| **长期记忆** | PostgreSQL 持久化 + 向量索引 |
+
+### 架构设计
+
+详见: [docs/architecture/agent-refactoring-design.md](docs/architecture/agent-refactoring-design.md)
