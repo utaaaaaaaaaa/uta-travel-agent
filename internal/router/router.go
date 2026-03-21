@@ -22,38 +22,41 @@ import (
 
 // Router handles HTTP requests and routes to appropriate handlers
 type Router struct {
-	registry     *agent.Registry
-	scheduler    *scheduler.Scheduler
-	mux          *http.ServeMux
-	llmClient    llm.Provider
-	ragSvc       *rag.Service
-	mainAgent    *agent.MainAgent
-	toolRegistry agent.ToolRegistry
-	tavilyAPIKey string
+	registry       *agent.Registry
+	scheduler      *scheduler.Scheduler
+	mux            *http.ServeMux
+	llmClient      llm.Provider
+	ragSvc         *rag.Service
+	mainAgent      *agent.MainAgent
+	toolRegistry   agent.ToolRegistry
+	tavilyAPIKey   string
+	sessionHandler *SessionHandler
 }
 
 // RouterConfig for creating a router
 type RouterConfig struct {
-	Registry     *agent.Registry
-	Scheduler    *scheduler.Scheduler
-	LLMClient    llm.Provider
-	RAGSvc       *rag.Service
-	MainAgent    *agent.MainAgent
-	ToolRegistry agent.ToolRegistry
-	TavilyAPIKey string
+	Registry       *agent.Registry
+	Scheduler      *scheduler.Scheduler
+	LLMClient      llm.Provider
+	RAGSvc         *rag.Service
+	MainAgent      *agent.MainAgent
+	ToolRegistry   agent.ToolRegistry
+	TavilyAPIKey   string
+	SessionHandler *SessionHandler
 }
 
 // NewRouter creates a new router
 func NewRouter(cfg RouterConfig) *Router {
 	r := &Router{
-		registry:     cfg.Registry,
-		scheduler:    cfg.Scheduler,
-		mux:          http.NewServeMux(),
-		llmClient:    cfg.LLMClient,
-		ragSvc:       cfg.RAGSvc,
-		mainAgent:    cfg.MainAgent,
-		toolRegistry: cfg.ToolRegistry,
-		tavilyAPIKey: cfg.TavilyAPIKey,
+		registry:       cfg.Registry,
+		scheduler:      cfg.Scheduler,
+		mux:            http.NewServeMux(),
+		llmClient:      cfg.LLMClient,
+		ragSvc:         cfg.RAGSvc,
+		mainAgent:      cfg.MainAgent,
+		toolRegistry:   cfg.ToolRegistry,
+		tavilyAPIKey:   cfg.TavilyAPIKey,
+		sessionHandler: cfg.SessionHandler,
 	}
 
 	r.setupRoutes()
@@ -71,6 +74,17 @@ func NewRouterWithDefaults(registry *agent.Registry, scheduler *scheduler.Schedu
 func (r *Router) setupRoutes() {
 	// Health check
 	r.mux.HandleFunc("GET /health", r.handleHealth)
+
+	// Session endpoints
+	if r.sessionHandler != nil {
+		r.mux.HandleFunc("GET /api/v1/sessions", r.sessionHandler.handleListSessions)
+		r.mux.HandleFunc("POST /api/v1/sessions", r.sessionHandler.handleCreateSession)
+		r.mux.HandleFunc("GET /api/v1/sessions/{id}", r.sessionHandler.handleGetSession)
+		r.mux.HandleFunc("PATCH /api/v1/sessions/{id}", r.sessionHandler.handleUpdateSession)
+		r.mux.HandleFunc("DELETE /api/v1/sessions/{id}", r.sessionHandler.handleDeleteSession)
+		r.mux.HandleFunc("GET /api/v1/sessions/{id}/messages", r.sessionHandler.handleGetSessionMessages)
+		r.mux.HandleFunc("POST /api/v1/sessions/{id}/chat", r.sessionHandler.handleSessionChat)
+	}
 
 	// Agent endpoints
 	r.mux.HandleFunc("GET /api/v1/agents", r.handleListAgents)
