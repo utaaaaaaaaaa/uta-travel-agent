@@ -169,29 +169,35 @@ func (f *AgentFactory) CreateDestinationAgent(destination string, userID string)
 
 // CreateGuideAgentForDestination creates a guide agent for an existing destination
 func (f *AgentFactory) CreateGuideAgentForDestination(destAgent *DestinationAgent) (Agent, error) {
-	// Get max iterations from template if available
-	maxIterations := 5 // Default for guide agent
-	if template, err := f.templateRegistry.Get(AgentTypeGuide); err == nil {
-		if template.Spec.Decision.MaxIterations > 0 {
-			maxIterations = template.Spec.Decision.MaxIterations
-		}
-	}
-
-	// Create LLM-powered guide agent
 	id := f.generateAgentID()
-	systemPrompt := GetSubagentPrompt(AgentTypeGuide)
 
-	// Add collection ID to the prompt
-	systemPrompt = systemPrompt + "\n\n## 当前导游集合\n你的知识库集合 ID 是: " + destAgent.VectorCollectionID
+	// Use the new dedicated GuideAgent with session support
+	agent := NewGuideAgent(GuideAgentConfig{
+		ID:           id,
+		Destination:  destAgent.Destination,
+		CollectionID: destAgent.VectorCollectionID,
+		LLMProvider:  f.llmProvider,
+		SystemPrompt: GetSubagentPrompt(AgentTypeGuide),
+		MaxContext:   8000,
+	})
 
-	config := LLMAgentConfig{
-		ID:            id,
-		AgentType:     AgentTypeGuide,
-		LLMProvider:   f.llmProvider,
-		SystemPrompt:  systemPrompt,
-		Tools:         f.toolRegistry,
-		MaxIterations: maxIterations,
+	// Set tools if available
+	if f.toolRegistry != nil {
+		agent.SetTools(f.toolRegistry)
 	}
 
-	return NewLLMAgent(config), nil
+	return agent, nil
+}
+
+// CreateGuideAgentWithSession creates a session-based guide agent
+func (f *AgentFactory) CreateGuideAgentWithSession(destination, collectionID string) *GuideAgent {
+	id := f.generateAgentID()
+
+	return NewGuideAgent(GuideAgentConfig{
+		ID:           id,
+		Destination:  destination,
+		CollectionID: collectionID,
+		LLMProvider:  f.llmProvider,
+		MaxContext:   8000,
+	})
 }
