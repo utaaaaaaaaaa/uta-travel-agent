@@ -36,10 +36,10 @@ type ListOptions struct {
 
 // ListResult contains paginated session results
 type ListResult struct {
-	Sessions  []*Session
-	Total     int
-	HasMore   bool
-	Grouped   map[string][]*Session // Grouped by date: "today", "yesterday", "previous"
+	Sessions []*Session              `json:"sessions"`
+	Total    int                     `json:"total"`
+	HasMore  bool                    `json:"has_more"`
+	Grouped  map[string][]*Session   `json:"grouped"` // Grouped by date: "today", "yesterday", "previous"
 }
 
 // PostgreSQLStorage implements Storage using PostgreSQL
@@ -380,4 +380,30 @@ func joinClauses(clauses []string) string {
 		result += clause
 	}
 	return result
+}
+
+// GroupSessionsByDate groups sessions by date (today, yesterday, previous)
+func GroupSessionsByDate(sessions []*Session) map[string][]*Session {
+	now := time.Now()
+	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	yesterday := today.AddDate(0, 0, -1)
+
+	grouped := map[string][]*Session{
+		"today":     {},
+		"yesterday": {},
+		"previous":  {},
+	}
+
+	for _, session := range sessions {
+		createdAt := session.CreatedAt()
+		if createdAt.After(today) {
+			grouped["today"] = append(grouped["today"], session)
+		} else if createdAt.After(yesterday) {
+			grouped["yesterday"] = append(grouped["yesterday"], session)
+		} else {
+			grouped["previous"] = append(grouped["previous"], session)
+		}
+	}
+
+	return grouped
 }

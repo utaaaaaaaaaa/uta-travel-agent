@@ -2,6 +2,7 @@
 package session
 
 import (
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -265,4 +266,9 @@ func FromSnapshot(snapshot *Snapshot) (*Session, error) {
 		messageCount: snapshot.MessageCount,
 		metadata:     metadata,
 	}, nil
+}
+
+// MarshalJSON implements json.Marshaler for Session
+func (s *Session) MarshalJSON() ([]byte, error) {
+	return json.Marshal(s.ToSnapshot())
 }
