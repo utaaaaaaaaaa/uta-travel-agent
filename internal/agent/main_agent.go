@@ -10,15 +10,17 @@ import (
 	"time"
 
 	"github.com/utaaa/uta-travel-agent/internal/llm"
+	"github.com/utaaa/uta-travel-agent/internal/memory"
 )
 
 // MainAgent is the primary orchestrator agent
 type MainAgent struct {
 	*BaseAgent
-	llmProvider llm.Provider
-	subagents   map[AgentType]Agent
-	subagentOrder []AgentType
-	mu          sync.RWMutex
+	llmProvider         llm.Provider
+	subagents           map[AgentType]Agent
+	subagentOrder       []AgentType
+	preferenceExtractor *memory.PreferenceExtractor
+	mu                  sync.RWMutex
 }
 
 // MainAgentConfig for creating a main agent
@@ -30,12 +32,38 @@ type MainAgentConfig struct {
 
 // NewMainAgent creates a new main agent with LLM support
 func NewMainAgent(config MainAgentConfig) *MainAgent {
-	return &MainAgent{
-		BaseAgent:   NewBaseAgent(config.ID, AgentTypeMain, config.Template),
-		llmProvider: config.LLMProvider,
-		subagents:   make(map[AgentType]Agent),
+	agent := &MainAgent{
+		BaseAgent:     NewBaseAgent(config.ID, AgentTypeMain, config.Template),
+		llmProvider:   config.LLMProvider,
+		subagents:     make(map[AgentType]Agent),
 		subagentOrder: []AgentType{},
 	}
+
+	// Create preference extractor if LLM provider is available
+	if config.LLMProvider != nil {
+		agent.preferenceExtractor = memory.NewPreferenceExtractor(&preferenceLLMAdapter{provider: config.LLMProvider})
+	}
+
+	return agent
+}
+
+// preferenceLLMAdapter adapts llm.Provider to memory.LLMProvider interface
+type preferenceLLMAdapter struct {
+	provider llm.Provider
+}
+
+func (a *preferenceLLMAdapter) Complete(ctx context.Context, messages []memory.LLMMessage) (*memory.LLMResponse, error) {
+	llmMsgs := make([]llm.Message, len(messages))
+	for i, m := range messages {
+		llmMsgs[i] = llm.Message{Role: m.Role, Content: m.Content}
+	}
+
+	resp, err := a.provider.Complete(ctx, llmMsgs)
+	if err != nil {
+		return nil, err
+	}
+
+	return &memory.LLMResponse{Content: resp.Content}, nil
 }
 
 // RegisterSubagent adds a subagent to the main agent
@@ -919,7 +947,8 @@ func (a *MainAgent) ChatStreamWithDestination(ctx context.Context, message, dest
 
 // ChatStreamWithDestinationAndHistory streams a response with destination context and external conversation history
 // This is used by sessions which manage their own memory separately
-func (a *MainAgent) ChatStreamWithDestinationAndHistory(ctx context.Context, message, destination string, history []llm.Message) (<-chan string, <-chan error, []llm.Message) {
+// mem parameter is optional - if provided, preferences will be loaded/saved
+func (a *MainAgent) ChatStreamWithDestinationAndHistory(ctx context.Context, message, destination string, history []llm.Message, mem *memory.PersistentMemory) (<-chan string, <-chan error, []llm.Message) {
 	outputCh := make(chan string, 10)
 	errCh := make(chan error, 1)
 	updatedHistory := make([]llm.Message, 0)
@@ -938,15 +967,35 @@ func (a *MainAgent) ChatStreamWithDestinationAndHistory(ctx context.Context, mes
 			return
 		}
 
+		// Load user preferences if memory is provided
+		var prefs *memory.UserPreferences
+		if mem != nil {
+			prefs, _ = mem.RecallPreferences()
+		}
+
 		// Build messages from provided history
 		messages := make([]llm.Message, len(history)+1)
 		copy(messages, history)
 		messages[len(history)] = llm.Message{Role: "user", Content: message}
 
-		// Get destination-specific system prompt
-		systemPrompt := a.getGuideSystemPrompt(destination)
-		messagesWithSystem := make([]llm.Message, 0, len(messages)+1)
+		// Get destination-specific system prompt with preferences
+		systemPrompt := a.getGuideSystemPromptWithPrefs(destination, prefs)
+		messagesWithSystem := make([]llm.Message, 0, len(messages)+2)
+
+		// Add system prompt
 		messagesWithSystem = append(messagesWithSystem, llm.Message{Role: "system", Content: systemPrompt})
+
+		// Add user preferences context if available
+		if prefs != nil && !prefs.IsEmpty() {
+			prefsContext := prefs.FormatAsContext()
+			if prefsContext != "" {
+				messagesWithSystem = append(messagesWithSystem, llm.Message{
+					Role:    "system",
+					Content: prefsContext,
+				})
+			}
+		}
+
 		messagesWithSystem = append(messagesWithSystem, messages...)
 
 		// Stream from LLM
@@ -997,6 +1046,11 @@ func (a *MainAgent) ChatStreamWithDestinationAndHistory(ctx context.Context, mes
 		// Return updated history (for caller to save)
 		updatedHistory = append(history, llm.Message{Role: "user", Content: message})
 		updatedHistory = append(updatedHistory, llm.Message{Role: "assistant", Content: fullResponse.String()})
+
+		// Asynchronously extract and save preferences if memory is provided
+		if mem != nil && a.preferenceExtractor != nil {
+			go a.extractAndSavePreferences(context.Background(), mem, message, fullResponse.String())
+		}
 	}()
 
 	// Wait for goroutine to complete and return updated history
@@ -1005,6 +1059,116 @@ func (a *MainAgent) ChatStreamWithDestinationAndHistory(ctx context.Context, mes
 	}()
 
 	return outputCh, errCh, updatedHistory
+}
+
+// extractAndSavePreferences extracts preferences from conversation and saves to memory
+func (a *MainAgent) extractAndSavePreferences(ctx context.Context, mem *memory.PersistentMemory, userMsg, assistantMsg string) {
+	// Build conversation for extraction
+	conversation := fmt.Sprintf("用户: %s\n助手: %s", userMsg, assistantMsg)
+
+	// Extract new preferences
+	newPrefs, err := a.preferenceExtractor.ExtractPreferences(ctx, conversation)
+	if err != nil {
+		log.Printf("[MainAgent] Failed to extract preferences: %v", err)
+		return
+	}
+
+	// Skip if no preferences extracted
+	if newPrefs.IsEmpty() {
+		return
+	}
+
+	// Load existing preferences and merge
+	existingPrefs, _ := mem.RecallPreferences()
+	mergedPrefs := memory.MergePreferences(existingPrefs, newPrefs)
+
+	// Save merged preferences
+	if err := mem.RememberPreferences(mergedPrefs); err != nil {
+		log.Printf("[MainAgent] Failed to save preferences: %v", err)
+		return
+	}
+
+	log.Printf("[MainAgent] Saved updated preferences: travel_style=%s, budget=%s",
+		mergedPrefs.TravelStyle, mergedPrefs.BudgetLevel)
+}
+
+// getGuideSystemPromptWithPrefs returns a destination-specific system prompt with preference awareness
+func (a *MainAgent) getGuideSystemPromptWithPrefs(destination string, prefs *memory.UserPreferences) string {
+	if destination == "" {
+		return a.getSystemPrompt()
+	}
+
+	// Base prompt
+	basePrompt := a.getGuideSystemPrompt(destination)
+
+	// Add preference awareness section if preferences exist
+	if prefs != nil && !prefs.IsEmpty() {
+		var prefGuidance strings.Builder
+		prefGuidance.WriteString("\n\n【用户偏好参考】\n")
+		prefGuidance.WriteString("请根据以下用户偏好调整推荐内容:\n")
+
+		if prefs.TravelStyle != "" {
+			prefGuidance.WriteString(fmt.Sprintf("- 旅行风格: %s\n", formatTravelStyle(prefs.TravelStyle)))
+		}
+		if prefs.BudgetLevel != "" {
+			prefGuidance.WriteString(fmt.Sprintf("- 预算级别: %s\n", formatBudgetLevel(prefs.BudgetLevel)))
+		}
+		if len(prefs.DietaryRestrictions) > 0 {
+			prefGuidance.WriteString(fmt.Sprintf("- 饮食限制: %s (推荐餐厅时请注意)\n", strings.Join(prefs.DietaryRestrictions, ", ")))
+		}
+		if len(prefs.PreferredActivities) > 0 {
+			prefGuidance.WriteString(fmt.Sprintf("- 喜欢的活动: %s\n", strings.Join(prefs.PreferredActivities, ", ")))
+		}
+		if len(prefs.Dislikes) > 0 {
+			prefGuidance.WriteString(fmt.Sprintf("- 不喜欢: %s (请避免推荐)\n", strings.Join(prefs.Dislikes, ", ")))
+		}
+		if prefs.TravelPace != "" {
+			prefGuidance.WriteString(fmt.Sprintf("- 旅行节奏: %s\n", formatTravelPace(prefs.TravelPace)))
+		}
+
+		return basePrompt + prefGuidance.String()
+	}
+
+	return basePrompt
+}
+
+// Helper functions for preference formatting (duplicated from preferences.go to avoid import cycles)
+func formatTravelStyle(style string) string {
+	styles := map[string]string{
+		"cultural":   "文化历史",
+		"food":       "美食探索",
+		"adventure":  "冒险户外",
+		"art":        "艺术人文",
+		"relaxation": "休闲度假",
+	}
+	if s, ok := styles[style]; ok {
+		return s
+	}
+	return style
+}
+
+func formatBudgetLevel(level string) string {
+	levels := map[string]string{
+		"economy":   "经济实惠",
+		"mid-range": "中等预算",
+		"luxury":    "奢华享受",
+	}
+	if s, ok := levels[level]; ok {
+		return s
+	}
+	return level
+}
+
+func formatTravelPace(pace string) string {
+	paces := map[string]string{
+		"slow":     "慢节奏深度游",
+		"moderate": "适中节奏",
+		"fast":     "快节奏打卡",
+	}
+	if s, ok := paces[pace]; ok {
+		return s
+	}
+	return pace
 }
 
 // Helper functions to detect request type

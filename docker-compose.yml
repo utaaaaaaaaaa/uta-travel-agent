@@ -48,6 +48,28 @@ services:
     volumes:
       - redis_data:/data
 
+  # Neo4j - Knowledge Graph Database
+  neo4j:
+    image: neo4j:5.15
+    container_name: uta-neo4j
+    ports:
+      - "7474:7474"  # HTTP
+      - "7687:7687"  # Bolt
+    environment:
+      - NEO4J_AUTH=neo4j/uta-password
+      - NEO4J_PLUGINS=["apoc"]
+      - NEO4J_dbms_memory_heap_initial__size=512m
+      - NEO4J_dbms_memory_heap_max__size=1G
+      - NEO4J_dbms_memory_pagecache_size=256m
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7474/"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ===================
   # Application Services
   # ===================
@@ -88,6 +110,9 @@ services:
       - DATABASE_PASSWORD=postgres
       - DATABASE_NAME=uta_travel
       - DATABASE_SSLMODE=disable
+      - NEO4J_URI=bolt://neo4j:7687
+      - NEO4J_USERNAME=neo4j
+      - NEO4J_PASSWORD=uta-password
       - LLM_API_KEY=${LLM_API_KEY:-}
       - LLM_BASE_URL=${LLM_BASE_URL:-https://open.bigmodel.cn/api/paas/v4}
       - LLM_MODEL=${LLM_MODEL:-glm-4-flash}
@@ -95,6 +120,8 @@ services:
       postgres:
         condition: service_healthy
       qdrant:
+        condition: service_healthy
+      neo4j:
         condition: service_healthy
       embedding:
         condition: service_started
@@ -118,6 +145,8 @@ volumes:
   postgres_data:
   qdrant_data:
   redis_data:
+  neo4j_data:
+  neo4j_logs:
   embedding_models:
   huggingface_cache:
 

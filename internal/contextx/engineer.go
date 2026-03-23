@@ -27,12 +27,20 @@ type EngineerConfig struct {
 	MaxTokens        int
 	LLMProvider      llm.Provider
 	CompressionModel string // Model to use for compression
+	UseLongTerm      bool   `json:"use_long_term"`      // Enable long-term memory context
+	UsePreferences   bool   `json:"use_preferences"`    // Enable user preferences context
+	UseGSSC          bool   `json:"use_gssc"`           // Enable GSSC pipeline
 }
 
 // Engineer manages context window for agents
 type Engineer struct {
 	maxTokens   int
 	llmProvider llm.Provider
+	useLongTerm bool
+	usePrefs    bool
+	useGSSC     bool
+	gsscConfig  ContextConfig
+	ragService  RAGService
 
 	mu         sync.RWMutex
 	priorities map[string]Priority
@@ -44,12 +52,37 @@ func NewEngineer(config EngineerConfig) *Engineer {
 	if config.MaxTokens <= 0 {
 		config.MaxTokens = 8000
 	}
+
+	gsscConfig := DefaultContextConfig()
+	gsscConfig.MaxTokens = config.MaxTokens
+	if config.LLMProvider != nil {
+		gsscConfig.EnableCompression = true
+	}
+
 	return &Engineer{
 		maxTokens:   config.MaxTokens,
 		llmProvider: config.LLMProvider,
+		useLongTerm: config.UseLongTerm,
+		usePrefs:    config.UsePreferences,
+		useGSSC:     config.UseGSSC,
+		gsscConfig:  gsscConfig,
 		priorities:  make(map[string]Priority),
 		compressed:  make(map[string]string),
 	}
+}
+
+// SetRAGService sets the RAG service for GSSC pipeline
+func (e *Engineer) SetRAGService(service RAGService) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.ragService = service
+}
+
+// SetGSSCConfig sets the GSSC configuration
+func (e *Engineer) SetGSSCConfig(config ContextConfig) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.gsscConfig = config
 }
 
 // SetMaxTokens sets the maximum context window size
@@ -211,18 +244,83 @@ func (e *Engineer) BuildContext(mem *memory.PersistentMemory, maxTokens int) []l
 	return messages
 }
 
-// BuildContextWithSystem builds context including system message
+// BuildContextWithSystem builds context including system message and user preferences
 func (e *Engineer) BuildContextWithSystem(mem *memory.PersistentMemory, systemPrompt string, maxTokens int) []llm.Message {
 	// Reserve tokens for system prompt
 	systemTokens := EstimateTokens(systemPrompt)
-	remainingTokens := maxTokens - systemTokens - 200 // Buffer for response
+
+	// Load user preferences if enabled
+	var prefsContext string
+	var prefsTokens int
+	if e.usePrefs {
+		prefs, _ := mem.RecallPreferences()
+		if prefs != nil {
+			prefsContext = prefs.FormatAsContext()
+			prefsTokens = EstimateTokens(prefsContext)
+		}
+	}
+
+	// Calculate remaining tokens for conversation history
+	remainingTokens := maxTokens - systemTokens - prefsTokens - 200 // Buffer for response
 
 	messages := e.BuildContext(mem, remainingTokens)
 
-	// Prepend system message
-	return append([]llm.Message{
-		{Role: "system", Content: systemPrompt},
-	}, messages...)
+	// Build final messages array
+	result := make([]llm.Message, 0, len(messages)+3)
+
+	// Add system prompt
+	result = append(result, llm.Message{Role: "system", Content: systemPrompt})
+
+	// Add user preferences as context if available
+	if prefsContext != "" {
+		result = append(result, llm.Message{
+			Role:    "system",
+			Content: prefsContext,
+		})
+	}
+
+	// Add conversation history
+	result = append(result, messages...)
+
+	return result
+}
+
+// BuildContextWithSystemAndPrefs builds context with explicit preferences
+func (e *Engineer) BuildContextWithSystemAndPrefs(mem *memory.PersistentMemory, systemPrompt string, prefs *memory.UserPreferences, maxTokens int) []llm.Message {
+	// Reserve tokens for system prompt
+	systemTokens := EstimateTokens(systemPrompt)
+
+	// Use provided preferences
+	var prefsContext string
+	var prefsTokens int
+	if prefs != nil {
+		prefsContext = prefs.FormatAsContext()
+		prefsTokens = EstimateTokens(prefsContext)
+	}
+
+	// Calculate remaining tokens for conversation history
+	remainingTokens := maxTokens - systemTokens - prefsTokens - 200 // Buffer for response
+
+	messages := e.BuildContext(mem, remainingTokens)
+
+	// Build final messages array
+	result := make([]llm.Message, 0, len(messages)+3)
+
+	// Add system prompt
+	result = append(result, llm.Message{Role: "system", Content: systemPrompt})
+
+	// Add user preferences as context if available
+	if prefsContext != "" {
+		result = append(result, llm.Message{
+			Role:    "system",
+			Content: prefsContext,
+		})
+	}
+
+	// Add conversation history
+	result = append(result, messages...)
+
+	return result
 }
 
 // getCompressedSummary gets or creates a compressed summary for an item
@@ -325,8 +423,63 @@ func (e *Engineer) Stats() map[string]any {
 	defer e.mu.RUnlock()
 
 	return map[string]any{
-		"max_tokens":        e.maxTokens,
+		"max_tokens":          e.maxTokens,
 		"cached_compressions": len(e.compressed),
-		"priority_rules":    len(e.priorities),
+		"priority_rules":      len(e.priorities),
+		"use_gssc":            e.useGSSC,
+		"use_long_term":       e.useLongTerm,
+		"use_preferences":     e.usePrefs,
 	}
+}
+
+// BuildContextWithGSSC builds context using the GSSC pipeline
+// This method uses the advanced Gather-Select-Structure-Compress pipeline
+func (e *Engineer) BuildContextWithGSSC(mem *memory.PersistentMemory, query string, maxTokens int) []llm.Message {
+	if maxTokens <= 0 {
+		maxTokens = e.GetMaxTokens()
+	}
+
+	// Create GSSC pipeline
+	pipeline := NewGSSCPipeline(e.gsscConfig, mem, e.ragService, e.llmProvider)
+
+	// Build context using GSSC
+	return pipeline.BuildContextWithGSSC(mem, query, maxTokens)
+}
+
+// BuildContextOptimized builds context with automatic GSSC selection
+// If GSSC is enabled, uses GSSC pipeline; otherwise uses legacy method
+func (e *Engineer) BuildContextOptimized(mem *memory.PersistentMemory, systemPrompt, query string, maxTokens int) []llm.Message {
+	if e.useGSSC {
+		// Use GSSC pipeline
+		messages := e.BuildContextWithGSSC(mem, query, maxTokens)
+
+		// Prepend system prompt
+		if systemPrompt != "" {
+			messagesWithSystem := make([]llm.Message, 0, len(messages)+1)
+			messagesWithSystem = append(messagesWithSystem, llm.Message{
+				Role:    "system",
+				Content: systemPrompt,
+			})
+			messagesWithSystem = append(messagesWithSystem, messages...)
+			return messagesWithSystem
+		}
+		return messages
+	}
+
+	// Use legacy method
+	return e.BuildContextWithSystem(mem, systemPrompt, maxTokens)
+}
+
+// IsGSSCEnabled returns whether GSSC pipeline is enabled
+func (e *Engineer) IsGSSCEnabled() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.useGSSC
+}
+
+// SetGSSCEnabled enables or disables GSSC pipeline
+func (e *Engineer) SetGSSCEnabled(enabled bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.useGSSC = enabled
 }

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -294,6 +295,118 @@ func (m *PersistentMemory) GetLongTerm() []Item {
 	result := make([]Item, len(m.longTerm))
 	copy(result, m.longTerm)
 	return result
+}
+
+// GetAllLongTermByKeyPrefix returns long-term memory items with keys matching a prefix
+func (m *PersistentMemory) GetAllLongTermByKeyPrefix(prefix string) []Item {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var result []Item
+	for _, item := range m.longTerm {
+		if k, ok := item.Metadata["key"].(string); ok && strings.HasPrefix(k, prefix) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+// RememberPreferences stores user preferences in long-term memory
+func (m *PersistentMemory) RememberPreferences(prefs *UserPreferences) error {
+	if prefs == nil {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	content, err := json.Marshal(prefs)
+	if err != nil {
+		return fmt.Errorf("failed to marshal preferences: %w", err)
+	}
+
+	// Remove old preferences
+	var newLongTerm []Item
+	for _, item := range m.longTerm {
+		if k, ok := item.Metadata["key"].(string); ok && k == "user_preferences" {
+			continue
+		}
+		newLongTerm = append(newLongTerm, item)
+	}
+
+	// Add new preferences
+	item := Item{
+		ID:        generateID(),
+		Type:      "preferences",
+		Content:   string(content),
+		Metadata:  map[string]any{"key": "user_preferences"},
+		Timestamp: time.Now(),
+	}
+
+	m.longTerm = append(newLongTerm, item)
+	return nil
+}
+
+// RecallPreferences retrieves user preferences from long-term memory
+func (m *PersistentMemory) RecallPreferences() (*UserPreferences, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Search from newest to oldest
+	for i := len(m.longTerm) - 1; i >= 0; i-- {
+		item := m.longTerm[i]
+		if k, ok := item.Metadata["key"].(string); ok && k == "user_preferences" {
+			var prefs UserPreferences
+			if err := json.Unmarshal([]byte(item.Content), &prefs); err != nil {
+				return nil, fmt.Errorf("failed to unmarshal preferences: %w", err)
+			}
+			return &prefs, nil
+		}
+	}
+
+	return nil, nil // No preferences found
+}
+
+// RememberDestination stores a destination in long-term memory
+func (m *PersistentMemory) RememberDestination(destination string) error {
+	if destination == "" {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Check if already exists
+	for _, item := range m.longTerm {
+		if k, ok := item.Metadata["key"].(string); ok && k == "destination:"+destination {
+			return nil // Already stored
+		}
+	}
+
+	item := Item{
+		ID:        generateID(),
+		Type:      "destination",
+		Content:   destination,
+		Metadata:  map[string]any{"key": "destination:" + destination},
+		Timestamp: time.Now(),
+	}
+
+	m.longTerm = append(m.longTerm, item)
+	return nil
+}
+
+// GetVisitedDestinations returns all visited destinations
+func (m *PersistentMemory) GetVisitedDestinations() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var destinations []string
+	for _, item := range m.longTerm {
+		if item.Type == "destination" {
+			destinations = append(destinations, item.Content)
+		}
+	}
+	return destinations
 }
 
 // SetEmbedding sets the embedding vector for an item

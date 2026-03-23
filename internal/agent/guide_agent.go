@@ -117,6 +117,18 @@ func (a *GuideAgent) Guide(ctx context.Context, query string) (string, error) {
 	// Build messages
 	var messages []llm.Message
 
+	// Load user preferences if available
+	prefs, _ := a.PersistentMemory().RecallPreferences()
+	if prefs != nil && !prefs.IsEmpty() {
+		prefsContext := prefs.FormatAsContext()
+		if prefsContext != "" {
+			messages = append(messages, llm.Message{
+				Role:    "system",
+				Content: prefsContext,
+			})
+		}
+	}
+
 	// If RAG service is available, query for context
 	if a.ragService != nil && a.collectionID != "" {
 		ragResult, err := a.ragService.Query(ctx, a.collectionID, query, 5)
@@ -183,6 +195,18 @@ func (a *GuideAgent) GuideStream(ctx context.Context, query string) (<-chan stri
 		// Build messages
 		var messages []llm.Message
 
+		// Load user preferences if available
+		prefs, _ := a.PersistentMemory().RecallPreferences()
+		if prefs != nil && !prefs.IsEmpty() {
+			prefsContext := prefs.FormatAsContext()
+			if prefsContext != "" {
+				messages = append(messages, llm.Message{
+					Role:    "system",
+					Content: prefsContext,
+				})
+			}
+		}
+
 		// Query RAG if available
 		if a.ragService != nil && a.collectionID != "" {
 			ragResult, err := a.ragService.Query(ctx, a.collectionID, query, 5)
@@ -198,8 +222,19 @@ func (a *GuideAgent) GuideStream(ctx context.Context, query string) (<-chan stri
 		// Add conversation history
 		messages = append(messages, a.BuildContext()...)
 
+		// Add current query
+		messages = append(messages, llm.Message{
+			Role:    "user",
+			Content: query,
+		})
+
+		// Add system prompt at the beginning
+		messagesWithSystem := make([]llm.Message, 0, len(messages)+1)
+		messagesWithSystem = append(messagesWithSystem, llm.Message{Role: "system", Content: a.GetSystemPrompt()})
+		messagesWithSystem = append(messagesWithSystem, messages...)
+
 		// Stream from LLM
-		chunkCh, streamErrCh := a.llmProvider.Stream(ctx, messages)
+		chunkCh, streamErrCh := a.llmProvider.Stream(ctx, messagesWithSystem)
 
 		var fullResponse strings.Builder
 
