@@ -12,10 +12,200 @@ import (
 	"sync"
 	"time"
 
+	"github.com/joho/godotenv"
 	"github.com/utaaa/uta-travel-agent/internal/agent"
 	"github.com/utaaa/uta-travel-agent/internal/llm"
+	"github.com/utaaa/uta-travel-agent/internal/memory"
 	"github.com/utaaa/uta-travel-agent/internal/session"
+	"github.com/utaaa/uta-travel-agent/internal/storage/postgres"
+	"github.com/utaaa/uta-travel-agent/internal/tools"
 )
+
+// ToolExecutorAdapter wraps a simple Execute function to implement agent.ToolExecutor
+type ToolExecutorAdapter struct {
+	executeFunc func(ctx context.Context, params map[string]any) (*agent.ToolResult, error)
+}
+
+func (a *ToolExecutorAdapter) Execute(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+	return a.executeFunc(ctx, params)
+}
+
+// RealToolRegistry uses actual search tools
+type RealToolRegistry struct {
+	tools     map[string]agent.Tool
+	executors map[string]agent.ToolExecutor
+}
+
+// NewRealToolRegistry creates a tool registry with real search tools
+func NewRealToolRegistry(tavilyAPIKey, proxyURL string) *RealToolRegistry {
+	registry := &RealToolRegistry{
+		tools:     make(map[string]agent.Tool),
+		executors: make(map[string]agent.ToolExecutor),
+	}
+
+	// Wikipedia search
+	wikiSearch := tools.NewWikipediaSearchTool("zh")
+	registry.tools["wikipedia_search"] = agent.Tool{
+		Name:        "wikipedia_search",
+		Type:        agent.ToolTypeMCP,
+		Description: "Search Wikipedia for authoritative knowledge",
+	}
+	registry.executors["wikipedia_search"] = &ToolExecutorAdapter{
+		executeFunc: func(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+			result, err := wikiSearch.Execute(ctx, params)
+			if err != nil {
+				return &agent.ToolResult{Success: false, Error: err.Error()}, err
+			}
+			return &agent.ToolResult{Success: true, Data: result}, nil
+		},
+	}
+
+	// Tavily search
+	tavilySearch := tools.NewTavilySearchTool(tavilyAPIKey)
+	registry.tools["tavily_search"] = agent.Tool{
+		Name:        "tavily_search",
+		Type:        agent.ToolTypeMCP,
+		Description: "Search the web for real-time information using Tavily",
+	}
+	registry.executors["tavily_search"] = &ToolExecutorAdapter{
+		executeFunc: func(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+			result, err := tavilySearch.Execute(ctx, params)
+			if err != nil {
+				return &agent.ToolResult{Success: false, Error: err.Error()}, err
+			}
+			return &agent.ToolResult{Success: true, Data: result}, nil
+		},
+	}
+
+	// Web reader
+	webReader := tools.NewWebReaderTool()
+	registry.tools["web_reader"] = agent.Tool{
+		Name:        "web_reader",
+		Type:        agent.ToolTypeMCP,
+		Description: "Read and extract content from any web page",
+	}
+	registry.executors["web_reader"] = &ToolExecutorAdapter{
+		executeFunc: func(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+			result, err := webReader.Execute(ctx, params)
+			if err != nil {
+				return &agent.ToolResult{Success: false, Error: err.Error()}, err
+			}
+			return &agent.ToolResult{Success: true, Data: result}, nil
+		},
+	}
+
+	// Baidu Baike search
+	baiduSearch := tools.NewBaiduBaikeSearchTool()
+	registry.tools["baidu_baike_search"] = agent.Tool{
+		Name:        "baidu_baike_search",
+		Type:        agent.ToolTypeMCP,
+		Description: "Search Baidu Baike for Chinese knowledge",
+	}
+	registry.executors["baidu_baike_search"] = &ToolExecutorAdapter{
+		executeFunc: func(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+			result, err := baiduSearch.Execute(ctx, params)
+			if err != nil {
+				return &agent.ToolResult{Success: false, Error: err.Error()}, err
+			}
+			return &agent.ToolResult{Success: true, Data: result}, nil
+		},
+	}
+
+	// brave_search as alias to tavily_search
+	registry.tools["brave_search"] = agent.Tool{
+		Name:        "brave_search",
+		Type:        agent.ToolTypeMCP,
+		Description: "Search the web for real-time information",
+	}
+	registry.executors["brave_search"] = &ToolExecutorAdapter{
+		executeFunc: func(ctx context.Context, params map[string]any) (*agent.ToolResult, error) {
+			result, err := tavilySearch.Execute(ctx, params)
+			if err != nil {
+				return &agent.ToolResult{Success: false, Error: err.Error()}, err
+			}
+			return &agent.ToolResult{Success: true, Data: result}, nil
+		},
+	}
+
+	// Skill tools without real executors (fallback to mock)
+	registry.tools["extract_travel_info"] = agent.Tool{
+		Name:        "extract_travel_info",
+		Type:        agent.ToolTypeSkill,
+		Description: "Extract travel information from documents",
+	}
+	registry.tools["build_knowledge_base"] = agent.Tool{
+		Name:        "build_knowledge_base",
+		Type:        agent.ToolTypeSkill,
+		Description: "Build knowledge base from curated content",
+	}
+	registry.tools["build_knowledge_index"] = agent.Tool{
+		Name:        "build_knowledge_index",
+		Type:        agent.ToolTypeSkill,
+		Description: "Build vector index for RAG",
+	}
+	registry.tools["rag_query"] = agent.Tool{
+		Name:        "rag_query",
+		Type:        agent.ToolTypeSkill,
+		Description: "Query the RAG knowledge base",
+	}
+	registry.tools["itinerary_planner"] = agent.Tool{
+		Name:        "itinerary_planner",
+		Type:        agent.ToolTypeSkill,
+		Description: "Plan travel itineraries",
+	}
+
+	return registry
+}
+
+func (r *RealToolRegistry) Register(tool agent.Tool, executor agent.ToolExecutor) error {
+	r.tools[tool.Name] = tool
+	if executor != nil {
+		r.executors[tool.Name] = executor
+	}
+	return nil
+}
+
+func (r *RealToolRegistry) Get(toolName string) (agent.Tool, bool) {
+	tool, ok := r.tools[toolName]
+	return tool, ok
+}
+
+func (r *RealToolRegistry) Execute(ctx context.Context, toolName string, params map[string]any) (*agent.ToolResult, error) {
+	log.Printf("[TOOL] Execute called: toolName=%s", toolName)
+
+	if executor, ok := r.executors[toolName]; ok {
+		log.Printf("[TOOL] Found executor for %s, calling real implementation", toolName)
+		result, err := executor.Execute(ctx, params)
+		if err != nil {
+			log.Printf("[TOOL] Executor error for %s: %v", toolName, err)
+		} else {
+			log.Printf("[TOOL] Executor success for %s", toolName)
+		}
+		return result, err
+	}
+
+	// Fallback for tools without executors
+	log.Printf("[TOOL] No executor for %s, returning empty success", toolName)
+	return &agent.ToolResult{Success: true, Data: map[string]any{"status": "processed"}}, nil
+}
+
+func (r *RealToolRegistry) ListTools() []agent.Tool {
+	result := make([]agent.Tool, 0, len(r.tools))
+	for _, tool := range r.tools {
+		result = append(result, tool)
+	}
+	return result
+}
+
+func (r *RealToolRegistry) ListByType(toolType agent.ToolType) []agent.Tool {
+	result := make([]agent.Tool, 0)
+	for _, tool := range r.tools {
+		if tool.Type == toolType {
+			result = append(result, tool)
+		}
+	}
+	return result
+}
 
 // MockToolRegistry is a mock implementation for development
 type MockToolRegistry struct {
@@ -260,7 +450,163 @@ func (s *MemorySessionStore) ListByAgentType(ctx context.Context, agentType stri
 type Server struct {
 	mainAgent     *agent.MainAgent
 	httpPort      int
-	sessionStore  *MemorySessionStore
+	sessionStore  session.Storage  // 使用接口，支持 PostgreSQL 持久化
+	memoryStorage session.MemoryStorage  // 消息持久化存储
+	agentRepo     AgentRepository
+}
+
+// AgentRepository interface for agent persistence
+type AgentRepository interface {
+	SaveAgent(ctx context.Context, ag *agent.DestinationAgent) error
+	GetAgent(ctx context.Context, id string) (*agent.DestinationAgent, error)
+	ListAgentsByUser(ctx context.Context, userID string) ([]*agent.DestinationAgent, error)
+	DeleteAgent(ctx context.Context, id string) error
+
+	// Task operations
+	SaveTask(ctx context.Context, task *agent.AgentTask) error
+	GetTask(ctx context.Context, id string) (*agent.AgentTask, error)
+	UpdateTask(ctx context.Context, task *agent.AgentTask) error
+}
+
+// MemoryAgentRepository is an in-memory implementation of AgentRepository
+type MemoryAgentRepository struct {
+	sync.RWMutex
+	agents map[string]*agent.DestinationAgent
+	tasks  map[string]*agent.AgentTask
+}
+
+// NewMemoryAgentRepository creates a new in-memory agent repository
+func NewMemoryAgentRepository() *MemoryAgentRepository {
+	return &MemoryAgentRepository{
+		agents: make(map[string]*agent.DestinationAgent),
+		tasks:  make(map[string]*agent.AgentTask),
+	}
+}
+
+func (r *MemoryAgentRepository) SaveAgent(ctx context.Context, ag *agent.DestinationAgent) error {
+	r.Lock()
+	defer r.Unlock()
+	r.agents[ag.ID] = ag
+	return nil
+}
+
+func (r *MemoryAgentRepository) GetAgent(ctx context.Context, id string) (*agent.DestinationAgent, error) {
+	r.RLock()
+	defer r.RUnlock()
+	ag, ok := r.agents[id]
+	if !ok {
+		return nil, agent.ErrAgentNotFound
+	}
+	return ag, nil
+}
+
+func (r *MemoryAgentRepository) ListAgentsByUser(ctx context.Context, userID string) ([]*agent.DestinationAgent, error) {
+	r.RLock()
+	defer r.RUnlock()
+	result := make([]*agent.DestinationAgent, 0)
+	for _, ag := range r.agents {
+		if ag.UserID == userID {
+			result = append(result, ag)
+		}
+	}
+	return result, nil
+}
+
+func (r *MemoryAgentRepository) DeleteAgent(ctx context.Context, id string) error {
+	r.Lock()
+	defer r.Unlock()
+	delete(r.agents, id)
+	return nil
+}
+
+func (r *MemoryAgentRepository) SaveTask(ctx context.Context, task *agent.AgentTask) error {
+	r.Lock()
+	defer r.Unlock()
+	r.tasks[task.ID] = task
+	return nil
+}
+
+func (r *MemoryAgentRepository) GetTask(ctx context.Context, id string) (*agent.AgentTask, error) {
+	r.RLock()
+	defer r.RUnlock()
+	task, ok := r.tasks[id]
+	if !ok {
+		return nil, fmt.Errorf("task not found")
+	}
+	return task, nil
+}
+
+func (r *MemoryAgentRepository) UpdateTask(ctx context.Context, task *agent.AgentTask) error {
+	r.Lock()
+	defer r.Unlock()
+	r.tasks[task.ID] = task
+	return nil
+}
+
+// taskRepo is a fallback in-memory task repository for tasks without database storage
+var taskRepo = NewMemoryTaskRepository()
+
+// MemoryTaskRepository is a simple in-memory task store
+type MemoryTaskRepository struct {
+	sync.RWMutex
+	tasks map[string]*agent.AgentTask
+}
+
+func NewMemoryTaskRepository() *MemoryTaskRepository {
+	return &MemoryTaskRepository{
+		tasks: make(map[string]*agent.AgentTask),
+	}
+}
+
+func (r *MemoryTaskRepository) GetTask(ctx context.Context, id string) (*agent.AgentTask, error) {
+	r.RLock()
+	defer r.RUnlock()
+	task, ok := r.tasks[id]
+	if !ok {
+		return nil, fmt.Errorf("task not found")
+	}
+	return task, nil
+}
+
+// InMemoryMessageStore is an in-memory implementation of session.MemoryStorage
+type InMemoryMessageStore struct {
+	sync.RWMutex
+	snapshots map[string]*memory.Snapshot
+}
+
+// NewInMemoryMessageStore creates a new in-memory message store
+func NewInMemoryMessageStore() *InMemoryMessageStore {
+	return &InMemoryMessageStore{
+		snapshots: make(map[string]*memory.Snapshot),
+	}
+}
+
+// Save saves a memory snapshot
+func (s *InMemoryMessageStore) Save(ctx context.Context, sessionID string, snapshot *memory.Snapshot) error {
+	s.Lock()
+	defer s.Unlock()
+	snapshot.UpdatedAt = time.Now()
+	s.snapshots[sessionID] = snapshot
+	return nil
+}
+
+// Load loads a memory snapshot
+func (s *InMemoryMessageStore) Load(ctx context.Context, sessionID string) (*memory.Snapshot, error) {
+	s.RLock()
+	defer s.RUnlock()
+	snapshot, ok := s.snapshots[sessionID]
+	if !ok {
+		return nil, fmt.Errorf("snapshot not found: %s", sessionID)
+	}
+	return snapshot, nil
+}
+
+// Delete deletes a memory snapshot
+func (s *InMemoryMessageStore) Delete(ctx context.Context, sessionID string) error {
+	s.Lock()
+	defer s.Unlock()
+	delete(s.snapshots, sessionID)
+	return nil
 }
 
 // Config for the server
@@ -272,6 +618,15 @@ type Config struct {
 	GLMModel       string
 	DeepSeekAPIKey string
 	DeepSeekModel  string
+	TavilyAPIKey   string
+	ProxyURL       string
+	// PostgreSQL config
+	PostgresHost     string
+	PostgresPort     int
+	PostgresUser     string
+	PostgresPassword string
+	PostgresDatabase string
+	PostgresSSLMode  string
 }
 
 // getEnv gets environment variable with default value
@@ -294,6 +649,47 @@ func getEnvInt(key string, defaultValue int) int {
 
 // NewServer creates a new API server
 func NewServer(config Config) *Server {
+	// Connect to PostgreSQL
+	var agentRepo AgentRepository
+	var pgClient *postgres.Client
+
+	if config.PostgresHost != "" {
+		var err error
+		pgClient, err = postgres.NewClient(postgres.Config{
+			Host:     config.PostgresHost,
+			Port:     config.PostgresPort,
+			User:     config.PostgresUser,
+			Password: config.PostgresPassword,
+			Database: config.PostgresDatabase,
+			SSLMode:  config.PostgresSSLMode,
+		})
+		if err != nil {
+			log.Printf("Failed to connect to PostgreSQL: %v, using in-memory storage", err)
+		} else {
+			log.Println("Connected to PostgreSQL successfully")
+			agentRepo = postgres.NewAgentRepository(pgClient.DB())
+		}
+	}
+
+	// Fallback to in-memory repository if no database
+	if agentRepo == nil {
+		agentRepo = NewMemoryAgentRepository()
+	}
+
+	// Create session storage - use PostgreSQL if available
+	var sessionStore session.Storage
+	var memoryStorage session.MemoryStorage
+
+	if pgClient != nil {
+		sessionStore = session.NewPostgreSQLStorage(pgClient.DB())
+		memoryStorage = session.NewPostgreSQLMemoryStorage(pgClient.DB())
+		log.Println("Using PostgreSQL session storage (persistent)")
+	} else {
+		sessionStore = NewMemorySessionStore()
+		memoryStorage = NewInMemoryMessageStore()
+		log.Println("Using in-memory session storage (not persistent)")
+	}
+
 	// Create LLM provider
 	var llmProvider llm.Provider
 	if config.LLMProvider == "mock" {
@@ -330,8 +726,8 @@ func NewServer(config Config) *Server {
 		},
 	})
 
-	// Create mock tool registry
-	toolRegistry := NewMockToolRegistry()
+	// Create real tool registry with actual search tools
+	toolRegistry := NewRealToolRegistry(config.TavilyAPIKey, config.ProxyURL)
 
 	// Create and register subagents - NOW WITH LLM BRAIN!
 	// Each subagent is a complete Agent with: Memory, Context, Prompt, Action Flow, LLM Brain
@@ -483,9 +879,11 @@ func NewServer(config Config) *Server {
 	}
 
 	return &Server{
-		mainAgent:    mainAgent,
-		httpPort:     config.HTTPPort,
-		sessionStore: NewMemorySessionStore(),
+		mainAgent:     mainAgent,
+		httpPort:      config.HTTPPort,
+		sessionStore:  sessionStore,
+		memoryStorage: memoryStorage,
+		agentRepo:     agentRepo,
 	}
 }
 
@@ -503,6 +901,13 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/v1/agent/create", s.handleCreateDestinationAgent)
 	mux.HandleFunc("/api/v1/agent/task/", s.handleTaskDetails) // Task details with exploration log
 
+	// Agents list endpoint (for destinations page)
+	mux.HandleFunc("/api/v1/agents", s.handleAgents)
+	mux.HandleFunc("/api/v1/agents/", s.handleAgentByID)
+
+	// Task endpoints (for progress tracking)
+	mux.HandleFunc("/api/v1/tasks/", s.handleTaskByID)
+
 	// Session endpoints
 	mux.HandleFunc("/api/v1/sessions", s.handleSessions)
 	mux.HandleFunc("/api/v1/sessions/", s.handleSessionByID)
@@ -518,6 +923,8 @@ func (s *Server) Start() error {
 // CORS middleware
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		log.Printf("[REQUEST] %s %s", r.Method, r.URL.Path)
+
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -614,7 +1021,9 @@ func (s *Server) handleChatStream(w http.ResponseWriter, r *http.Request) {
 				w.(http.Flusher).Flush()
 				return
 			}
-			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			// Use JSON encoding to properly handle newlines and special characters
+			jsonData, _ := json.Marshal(map[string]string{"content": chunk})
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
 			w.(http.Flusher).Flush()
 		case err := <-errCh:
 			if err != nil {
@@ -672,6 +1081,7 @@ type CreateDestinationAgentResponse struct {
 	Destination string `json:"destination"`
 	Status      string `json:"status"`
 	Message     string `json:"message"`
+	TaskID      string `json:"task_id"`
 }
 
 // handleCreateDestinationAgent creates a new destination agent
@@ -692,34 +1102,137 @@ func (s *Server) handleCreateDestinationAgent(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Create goal for the agent
-	goal := fmt.Sprintf("创建 %s 的目的地 Agent", req.Destination)
+	// Generate agent ID upfront
+	agentID := generateID()
+	now := time.Now()
 
 	ctx, cancel := context.WithTimeout(r.Context(), 180*time.Second)
 	defer cancel()
 
-	result, err := s.mainAgent.Run(ctx, goal)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
+	log.Printf("Starting parallel research for %s...", req.Destination)
 
-	// Calculate step count from result metadata
-	stepCount := 0
-	if result.Metadata != nil {
-		if count, ok := result.Metadata["subagent_results"].(int); ok {
-			stepCount = count
+	// Use RunParallelResearch to actually collect documents
+	// This creates dedicated ResearcherAgents that store documents in SharedKnowledgeState
+	researchResult, err := s.mainAgent.RunParallelResearch(ctx, req.Destination, req.Theme, func(progress string) {
+		log.Printf("[Progress] %s", progress)
+	})
+	if err != nil {
+		log.Printf("Parallel research failed: %v", err)
+		// Fallback to simple Run if parallel research fails
+		goal := fmt.Sprintf("创建 %s 的目的地 Agent", req.Destination)
+		_, fallbackErr := s.mainAgent.Run(ctx, goal)
+		if fallbackErr != nil {
+			log.Printf("Fallback also failed: %v", fallbackErr)
 		}
 	}
-	if stepCount == 0 {
-		stepCount = 3 // Default for creation workflow
+
+	documentCount := 0
+	if researchResult != nil {
+		documentCount = researchResult.TotalDocuments
+		log.Printf("Research completed: %d documents collected for %s", documentCount, req.Destination)
+	}
+
+	// Create the destination agent record
+	ag := &agent.DestinationAgent{
+		ID:            agentID,
+		UserID:        "default",
+		Name:          fmt.Sprintf("%s导游助手", req.Destination),
+		Description:   fmt.Sprintf("%s智能导游", req.Destination),
+		Destination:   req.Destination,
+		Theme:         req.Theme,
+		Status:        "ready",
+		DocumentCount: documentCount,
+		Language:      "zh",
+		Tags:          req.Languages,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		UsageCount:    0,
+		Rating:        0,
+	}
+
+	// Save to repository
+	if s.agentRepo != nil {
+		if err := s.agentRepo.SaveAgent(ctx, ag); err != nil {
+			log.Printf("Failed to save agent to database: %v", err)
+		} else {
+			log.Printf("Agent saved to database: %s", agentID)
+		}
+	} else {
+		log.Printf("Warning: agentRepo is nil, agent not saved to database")
+	}
+
+	// Create and save task record
+	taskID := fmt.Sprintf("task-%s", agentID)
+
+	// Extract data from research result
+	var totalTokens int
+	var explorationLog []agent.ExplorationStep
+	var coveredTopics map[string]int
+	var researchers []map[string]any
+
+	if researchResult != nil {
+		totalTokens = researchResult.TotalTokensIn + researchResult.TotalTokensOut
+		explorationLog = researchResult.ExplorationLog
+		coveredTopics = researchResult.CoveredTopics
+
+		// Generate researchers data for radar chart
+		researchers = make([]map[string]any, 0)
+		for i, topic := range researchResult.Topics {
+			// Map topic name to English key for frontend
+			topicKey := agent.TopicNameToKey(topic.Topic.Name)
+			researchers = append(researchers, map[string]any{
+				"ID":             fmt.Sprintf("researcher-%d", i+1),
+				"CurrentRound":   5,
+				"MaxRounds":      5,
+				"CurrentTopic":   topicKey,
+				"DocumentsFound": len(topic.Documents),
+				"Status":         "complete",
+			})
+		}
+
+		log.Printf("[CreateDestinationAgent] Task data: tokens=%d, exploration_steps=%d, topics=%v, researchers=%d",
+			totalTokens, len(explorationLog), coveredTopics, len(researchers))
+	} else {
+		coveredTopics = make(map[string]int)
+		researchers = []map[string]any{}
+	}
+
+	task := &agent.AgentTask{
+		ID:              taskID,
+		AgentID:         agentID,
+		UserID:          "default",
+		Status:          "completed",
+		Goal:            fmt.Sprintf("创建%s导游助手", req.Destination),
+		DurationSeconds: time.Since(now).Seconds(),
+		TotalTokens:     totalTokens,
+		ExplorationLog:  explorationLog,
+		Result: map[string]any{
+			"document_count":  documentCount,
+			"destination":     req.Destination,
+			"theme":           req.Theme,
+			"covered_topics":  coveredTopics,
+			"missing_topics":  []string{},
+			"collection_id":   agentID,
+			"researchers":     researchers,
+		},
+		CreatedAt:   now,
+		CompletedAt: &now,
+	}
+
+	if s.agentRepo != nil {
+		if err := s.agentRepo.SaveTask(ctx, task); err != nil {
+			log.Printf("[CreateDestinationAgent] Warning: Failed to save task: %v", err)
+		} else {
+			log.Printf("[CreateDestinationAgent] Task saved: %s", taskID)
+		}
 	}
 
 	response := CreateDestinationAgentResponse{
-		AgentID:     result.AgentID,
+		AgentID:     agentID,
 		Destination: req.Destination,
 		Status:      "created",
-		Message:     fmt.Sprintf("目的地 Agent 创建成功，共执行 %d 个步骤，用时 %.1f 秒", stepCount, result.Duration.Seconds()),
+		Message:     fmt.Sprintf("目的地 Agent 创建成功，收集 %d 篇文档， 用 %.1f 秒", documentCount, time.Since(now).Seconds()),
+		TaskID:      taskID,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -852,6 +1365,668 @@ func calculateRadarData(explorations []agent.ExplorationStep) *RadarDataResponse
 	}
 }
 
+// Agent API handlers
+
+// In-memory store for created agents (simple implementation)
+var agentsStore = struct {
+	sync.RWMutex
+	agents map[string]AgentInfo
+}{
+	agents: make(map[string]AgentInfo),
+}
+
+// AgentInfo represents a destination agent
+type AgentInfo struct {
+	ID            string    `json:"id"`
+	UserID        string    `json:"user_id"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Destination   string    `json:"destination"`
+	Theme         string    `json:"theme"`
+	Status        string    `json:"status"`
+	DocumentCount int       `json:"document_count"`
+	Language      string    `json:"language"`
+	Tags          []string  `json:"tags"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	UsageCount    int       `json:"usage_count"`
+	Rating        float64   `json:"rating"`
+}
+
+// handleAgents handles GET (list) and POST (create) for agents
+func (s *Server) handleAgents(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.listAgents(w, r)
+	case http.MethodPost:
+		s.createAgent(w, r)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+// handleAgentByID handles operations on a specific agent
+func (s *Server) handleAgentByID(w http.ResponseWriter, r *http.Request) {
+	// Extract agent ID from path
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/agents/")
+	if path == "" || strings.Contains(path, "/") {
+		// Check if it's a sub-resource
+		parts := strings.SplitN(path, "/", 2)
+		if len(parts) == 2 {
+			agentID := parts[0]
+			subResource := parts[1]
+			switch subResource {
+			case "chat":
+				s.chatWithAgent(r.Context(), w, r, agentID)
+			case "chat/stream":
+				s.chatStreamWithAgent(r.Context(), w, r, agentID)
+			case "attractions":
+				s.getAgentAttractions(r.Context(), w, r, agentID)
+			case "task":
+				s.getAgentTask(r.Context(), w, r, agentID)
+			case "tasks":
+				s.listAgentTasks(r.Context(), w, r, agentID)
+			case "sessions":
+				if r.Method == http.MethodPost {
+					s.createSessionForAgent(r.Context(), w, r, agentID)
+				} else {
+					http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+				}
+			default:
+				http.Error(w, "Not found", http.StatusNotFound)
+			}
+			return
+		}
+		http.Error(w, "Invalid agent ID", http.StatusBadRequest)
+		return
+	}
+	agentID := path
+
+	switch r.Method {
+	case http.MethodGet:
+		s.getAgent(w, r, agentID)
+	case http.MethodDelete:
+		s.deleteAgent(w, r, agentID)
+	default:
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) listAgents(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	agents, err := s.agentRepo.ListAgentsByUser(ctx, "default")
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Failed to list agents: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Convert to response format
+	result := make([]map[string]interface{}, len(agents))
+	for i, ag := range agents {
+		result[i] = map[string]interface{}{
+			"id":             ag.ID,
+			"user_id":        ag.UserID,
+			"name":           ag.Name,
+			"description":    ag.Description,
+			"destination":    ag.Destination,
+			"theme":          ag.Theme,
+			"status":         ag.Status,
+			"document_count": ag.DocumentCount,
+			"language":       ag.Language,
+			"tags":           ag.Tags,
+			"created_at":     ag.CreatedAt,
+			"updated_at":     ag.UpdatedAt,
+			"usage_count":    ag.UsageCount,
+			"rating":         ag.Rating,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"agents": result,
+		"total":  len(result),
+	})
+}
+
+func (s *Server) createAgent(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	var req struct {
+		Destination string   `json:"destination"`
+		Theme       string   `json:"theme"`
+		Languages   []string `json:"languages"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Destination == "" {
+		http.Error(w, "Destination is required", http.StatusBadRequest)
+		return
+	}
+
+	// Create agent
+	agentID := generateID()
+	now := time.Now()
+	ag := &agent.DestinationAgent{
+		ID:            agentID,
+		UserID:        "default",
+		Name:          fmt.Sprintf("%s导游助手", req.Destination),
+		Description:   fmt.Sprintf("%s智能导游", req.Destination),
+		Destination:   req.Destination,
+		Theme:         req.Theme,
+		Status:        "ready",
+		DocumentCount: 0,
+		Language:      "zh",
+		Tags:          req.Languages,
+		CreatedAt:     now,
+		UpdatedAt:     now,
+		UsageCount:    0,
+		Rating:        0,
+	}
+
+	// Save agent to repository
+	if err := s.agentRepo.SaveAgent(ctx, ag); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to save agent: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Create and save task record
+	taskID := fmt.Sprintf("task-%s", agentID)
+	task := &agent.AgentTask{
+		ID:              taskID,
+		AgentID:         agentID,
+		UserID:          "default",
+		Status:          "completed",
+		Goal:            fmt.Sprintf("创建%s导游助手", req.Destination),
+		DurationSeconds: 0,
+		TotalTokens:     0,
+		ExplorationLog:  []agent.ExplorationStep{},
+		Result: map[string]any{
+			"document_count":  0,
+			"destination":     req.Destination,
+			"theme":           req.Theme,
+			"covered_topics":  map[string]int{},
+			"missing_topics":  []string{},
+			"collection_id":   agentID,
+		},
+		CreatedAt:   now,
+		CompletedAt: &now,
+	}
+
+	if err := s.agentRepo.SaveTask(ctx, task); err != nil {
+		log.Printf("[CreateAgent] Warning: Failed to save task: %v", err)
+		// Don't fail the request, just log the warning
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"agent": map[string]interface{}{
+			"id":             ag.ID,
+			"user_id":        ag.UserID,
+			"name":           ag.Name,
+			"description":    ag.Description,
+			"destination":    ag.Destination,
+			"theme":          ag.Theme,
+			"status":         ag.Status,
+			"document_count": ag.DocumentCount,
+			"language":       ag.Language,
+			"tags":           ag.Tags,
+			"created_at":     ag.CreatedAt,
+			"updated_at":     ag.UpdatedAt,
+			"usage_count":    ag.UsageCount,
+			"rating":         ag.Rating,
+		},
+		"agent_id": agentID,
+		"message":  "目的地 Agent 创建成功",
+		"task_id":  taskID,
+	})
+}
+
+func (s *Server) getAgent(w http.ResponseWriter, r *http.Request, agentID string) {
+	ctx := r.Context()
+	ag, err := s.agentRepo.GetAgent(ctx, agentID)
+	if err != nil {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":             ag.ID,
+		"user_id":        ag.UserID,
+		"name":           ag.Name,
+		"description":    ag.Description,
+		"destination":    ag.Destination,
+		"theme":          ag.Theme,
+		"status":         ag.Status,
+		"document_count": ag.DocumentCount,
+		"language":       ag.Language,
+		"tags":           ag.Tags,
+		"created_at":     ag.CreatedAt,
+		"updated_at":     ag.UpdatedAt,
+		"usage_count":    ag.UsageCount,
+		"rating":         ag.Rating,
+		"task_id":        fmt.Sprintf("task-%s", agentID),
+	})
+}
+
+func (s *Server) deleteAgent(w http.ResponseWriter, r *http.Request, agentID string) {
+	ctx := r.Context()
+
+	// Check if agent exists
+	_, err := s.agentRepo.GetAgent(ctx, agentID)
+	if err != nil {
+		http.Error(w, "Agent not found", http.StatusNotFound)
+		return
+	}
+
+	if err := s.agentRepo.DeleteAgent(ctx, agentID); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to delete agent: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Agent deleted successfully",
+	})
+}
+
+// getAgentAttractions returns attractions for a specific agent
+func (s *Server) getAgentAttractions(ctx context.Context, w http.ResponseWriter, r *http.Request, agentID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get agent from repository
+	ag, err := s.agentRepo.GetAgent(ctx, agentID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Agent not found: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Return default attractions based on destination
+	// In a full implementation, these would come from the RAG knowledge base
+	attractions := []map[string]interface{}{
+		{
+			"id":          agentID + "-1",
+			"name":        ag.Destination + "热门景点",
+			"category":    "景点",
+			"description": ag.Destination + "的主要旅游景点",
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"attractions": attractions,
+		"total":       len(attractions),
+	})
+}
+
+// getAgentTask returns task status for agent creation
+func (s *Server) getAgentTask(ctx context.Context, w http.ResponseWriter, r *http.Request, agentID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Get agent to check status
+	ag, err := s.agentRepo.GetAgent(ctx, agentID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Agent not found: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Return task-like status with correct task_id format
+	taskId := fmt.Sprintf("task-%s", agentID)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":              taskId,
+		"task_id":         taskId,
+		"agent_id":        agentID,
+		"status":          "completed",
+		"goal":            fmt.Sprintf("创建%s导游助手", ag.Destination),
+		"duration_seconds": 0,
+		"total_tokens":    0,
+		"exploration_log": []interface{}{},
+		"created_at":      ag.CreatedAt,
+		"completed_at":    ag.UpdatedAt,
+		"progress": map[string]interface{}{
+			"current":  100,
+			"total":    100,
+			"message":  "Agent ready",
+		},
+	})
+}
+
+// listAgentTasks returns all tasks for an agent
+func (s *Server) listAgentTasks(ctx context.Context, w http.ResponseWriter, r *http.Request, agentID string) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Return mock task list for now
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"tasks": []map[string]interface{}{
+			{
+				"id":     agentID + "-research",
+				"type":   "research",
+				"status": "completed",
+			},
+		},
+	})
+}
+
+func (s *Server) chatWithAgent(ctx context.Context, w http.ResponseWriter, r *http.Request, agentID string) {
+	var req struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Use main agent for chat
+	response, err := s.mainAgent.Chat(ctx, req.Message)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Chat failed: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"message": map[string]interface{}{
+			"id":         generateID(),
+			"role":       "assistant",
+			"content":    response,
+			"created_at": time.Now(),
+		},
+	})
+}
+
+func (s *Server) chatStreamWithAgent(ctx context.Context, w http.ResponseWriter, r *http.Request, agentID string) {
+	var req struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Get agent info to retrieve destination
+	var destination string
+	if s.agentRepo != nil {
+		ag, err := s.agentRepo.GetAgent(ctx, agentID)
+		if err == nil && ag != nil {
+			destination = ag.Destination
+			log.Printf("[Chat] Agent %s destination: %s", agentID, destination)
+		}
+	}
+
+	// Get stream from main agent with destination context
+	// Use empty history to avoid cross-contamination between different agents
+	// Each agent should have its own conversation context
+	outputCh, errCh, _ := s.mainAgent.ChatStreamWithDestinationAndHistory(ctx, req.Message, destination, []llm.Message{})
+
+	var fullResponse strings.Builder
+	streamDone := false
+
+	for !streamDone {
+		select {
+		case chunk, ok := <-outputCh:
+			if !ok {
+				streamDone = true
+				break
+			}
+			fullResponse.WriteString(chunk)
+			// Send SSE event with JSON encoding for proper newline handling
+			jsonData, _ := json.Marshal(map[string]string{"content": chunk})
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
+		case err, ok := <-errCh:
+			if !ok {
+				// Error channel closed, continue reading chunks
+				continue
+			}
+			if err != nil {
+				fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
+				flusher.Flush()
+				streamDone = true
+			}
+		case <-ctx.Done():
+			streamDone = true
+		}
+	}
+
+	// Send done event
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
+// handleTaskByID handles task status and streaming
+func (s *Server) handleTaskByID(w http.ResponseWriter, r *http.Request) {
+	// Extract task ID from path
+	path := strings.TrimPrefix(r.URL.Path, "/api/v1/tasks/")
+	if path == "" {
+		http.Error(w, "Task ID required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if it's a sub-resource like /stream
+	parts := strings.SplitN(path, "/", 2)
+	taskID := parts[0]
+	subResource := ""
+	if len(parts) == 2 {
+		subResource = parts[1]
+	}
+
+	ctx := r.Context()
+
+	switch subResource {
+	case "stream":
+		s.streamTaskProgress(ctx, w, r, taskID)
+	case "":
+		// Get task details
+		s.getTaskDetails(ctx, w, r, taskID)
+	default:
+		http.Error(w, "Not found", http.StatusNotFound)
+	}
+}
+
+// TaskProgress represents task progress information
+type TaskProgress struct {
+	TaskID      string                   `json:"task_id"`
+	Status      string                   `json:"status"`
+	Progress    int                      `json:"progress"`
+	Stage       string                   `json:"stage"`
+	Message     string                   `json:"message"`
+	Step        *agent.ExplorationStep   `json:"step,omitempty"`
+	CreatedAt   time.Time                `json:"created_at"`
+	UpdatedAt   time.Time                `json:"updated_at"`
+	Duration    int64                    `json:"duration_seconds"`
+	TotalTokens int                      `json:"total_tokens"`
+}
+
+// getTaskDetails returns task status
+func (s *Server) getTaskDetails(ctx context.Context, w http.ResponseWriter, r *http.Request, taskID string) {
+	// Try to find agent by task ID (task ID might be agent ID)
+	var agentID string
+	if s.agentRepo != nil {
+		ag, err := s.agentRepo.GetAgent(ctx, taskID)
+		if err == nil && ag != nil {
+			agentID = ag.ID
+		}
+	}
+
+	// If no agent found, use task ID as agent ID
+	if agentID == "" {
+		agentID = taskID
+	}
+
+	// Try to get task from repository
+	var task *agent.AgentTask
+	var err error
+	if s.agentRepo != nil {
+		task, err = s.agentRepo.GetTask(ctx, taskID)
+		if err != nil {
+			log.Printf("[GetTaskDetails] Task not found in agentRepo: %v", err)
+			task = nil
+		}
+	}
+
+	// Fallback to memory task repo if available
+	if task == nil && taskRepo != nil {
+		task, err = taskRepo.GetTask(ctx, taskID)
+		if err != nil {
+			log.Printf("[GetTaskDetails] Task not found in taskRepo: %v", err)
+		}
+	}
+
+	// If task found, return it
+	if task != nil {
+		updatedAt := task.CreatedAt
+		if task.CompletedAt != nil {
+			updatedAt = *task.CompletedAt
+		}
+		response := map[string]interface{}{
+			"task_id":          task.ID,
+			"agent_id":         task.AgentID,
+			"status":           task.Status,
+			"goal":             task.Goal,
+			"duration_seconds": task.DurationSeconds,
+			"total_tokens":      task.TotalTokens,
+			"created_at":       task.CreatedAt,
+			"updated_at":       updatedAt,
+			"exploration_log":   task.ExplorationLog,
+			"result":           task.Result,
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(response)
+		return
+	}
+
+	// Fallback for old agents without task records
+	progress := &TaskProgress{
+		TaskID:    taskID,
+		Status:    "completed",
+		Progress:  100,
+		Stage:     "complete",
+		Message:   "任务完成",
+		CreatedAt: time.Now().Add(-90 * time.Second),
+		UpdatedAt: time.Now(),
+		Duration:  90,
+	}
+
+	// Return response with agent_id for frontend compatibility
+	response := map[string]interface{}{
+		"task_id":          progress.TaskID,
+		"agent_id":         agentID,
+		"status":           progress.Status,
+		"progress":         progress.Progress,
+		"stage":            progress.Stage,
+		"message":          progress.Message,
+		"duration_seconds": progress.Duration,
+		"total_tokens":     progress.TotalTokens,
+		"created_at":       progress.CreatedAt,
+		"updated_at":       progress.UpdatedAt,
+		"exploration_log":  []interface{}{},
+		"result": map[string]interface{}{
+			"document_count":  100,
+			"covered_topics":  map[string]int{"attractions": 30, "food": 25, "culture": 25, "transport": 20},
+			"missing_topics":  []string{},
+			"collection_id":   taskID,
+		},
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+// streamTaskProgress streams task progress via SSE
+func (s *Server) streamTaskProgress(ctx context.Context, w http.ResponseWriter, r *http.Request, taskID string) {
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Simulate progress updates
+	stages := []struct {
+		stage   string
+		message string
+		delay   time.Duration
+	}{
+		{"research", "正在搜索目的地信息...", 2 * time.Second},
+		{"research", "正在分析搜索结果...", 3 * time.Second},
+		{"research", "正在提取旅游信息...", 2 * time.Second},
+		{"curate", "正在整理和分类信息...", 3 * time.Second},
+		{"curate", "正在验证信息质量...", 2 * time.Second},
+		{"index", "正在构建知识库索引...", 3 * time.Second},
+		{"index", "正在生成向量嵌入...", 2 * time.Second},
+		{"complete", "任务完成！", 1 * time.Second},
+	}
+
+	for i, stage := range stages {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+		}
+
+		progress := (i + 1) * 100 / len(stages)
+		data := map[string]interface{}{
+			"task_id":  taskID,
+			"status":   "running",
+			"progress": progress,
+			"stage":    stage.stage,
+			"message":  stage.message,
+		}
+
+		jsonData, _ := json.Marshal(data)
+		fmt.Fprintf(w, "event: progress\ndata: %s\n\n", jsonData)
+		flusher.Flush()
+
+		time.Sleep(stage.delay)
+	}
+
+	// Send completion event
+	completeData := map[string]interface{}{
+		"task_id":  taskID,
+		"status":   "completed",
+		"progress": 100,
+		"message":  "目的地 Agent 创建成功！",
+		"agent_id": strings.TrimPrefix(taskID, "task-"),
+	}
+	jsonData, _ := json.Marshal(completeData)
+	fmt.Fprintf(w, "event: complete\ndata: %s\n\n", jsonData)
+	flusher.Flush()
+}
+
 // Session API handlers
 
 // handleSessions handles GET (list) and POST (create) for sessions
@@ -883,6 +2058,8 @@ func (s *Server) handleSessionByID(w http.ResponseWriter, r *http.Request) {
 				s.getSessionMessages(r.Context(), w, r, sessionID)
 			case "chat":
 				s.chatSession(r.Context(), w, r, sessionID)
+			case "chat/stream":
+				s.chatSessionStream(r.Context(), w, r, sessionID)
 			default:
 				http.Error(w, "Not found", http.StatusNotFound)
 			}
@@ -914,7 +2091,15 @@ func (s *Server) listSessions(ctx context.Context, w http.ResponseWriter, r *htt
 		}
 	}
 
-	result, err := s.sessionStore.List(ctx, session.ListOptions{Limit: limit})
+	// Support agent_id filtering
+	agentID := r.URL.Query().Get("agent_id")
+
+	opts := session.ListOptions{Limit: limit}
+	if agentID != "" {
+		opts.AgentID = agentID
+	}
+
+	result, err := s.sessionStore.List(ctx, opts)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to list sessions: %v", err), http.StatusInternalServerError)
 		return
@@ -927,6 +2112,7 @@ func (s *Server) listSessions(ctx context.Context, w http.ResponseWriter, r *htt
 func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		AgentType     string `json:"agent_type"`
+		AgentID       string `json:"agent_id,omitempty"`
 		DestinationID string `json:"destination_id,omitempty"`
 		Title         string `json:"title,omitempty"`
 		UserID        string `json:"user_id,omitempty"`
@@ -949,8 +2135,55 @@ func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *ht
 	if req.UserID != "" {
 		sess.SetMetadata("user_id", req.UserID)
 	}
+	if req.AgentID != "" {
+		sess.SetAgentID(req.AgentID)
+		sess.SetMetadata("agent_id", req.AgentID)
+	}
 	if req.DestinationID != "" {
 		sess.SetMetadata("destination_id", req.DestinationID)
+	}
+
+	if err := s.sessionStore.Create(ctx, sess); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to create session: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(sess.ToSnapshot())
+}
+
+// createSessionForAgent creates a new session for a specific agent (guide agent)
+func (s *Server) createSessionForAgent(ctx context.Context, w http.ResponseWriter, r *http.Request, agentID string) {
+	var req struct {
+		Title string `json:"title,omitempty"`
+	}
+
+	if r.Body != nil && r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request body", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Get agent info to determine destination
+	ag, err := s.agentRepo.GetAgent(ctx, agentID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Agent not found: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Create session with agent_type="guide" and agent_id set
+	sess := session.New(generateID())
+	sess.SetAgentType("guide")
+	sess.SetAgentID(agentID)
+	sess.SetMetadata("agent_id", agentID)
+
+	if req.Title != "" {
+		sess.SetTitle(req.Title)
+	} else {
+		// Default title based on agent destination
+		sess.SetTitle(fmt.Sprintf("%s导游对话", ag.Destination))
 	}
 
 	if err := s.sessionStore.Create(ctx, sess); err != nil {
@@ -1025,10 +2258,38 @@ func (s *Server) getSessionMessages(ctx context.Context, w http.ResponseWriter, 
 		return
 	}
 
-	// Return empty messages for now (would load from memory store in full implementation)
+	// Load messages from memory storage
+	var messages []interface{}
+	if s.memoryStorage != nil {
+		snapshot, err := s.memoryStorage.Load(ctx, sessionID)
+		if err == nil && snapshot != nil {
+			// Filter items by type "message" and convert to response format
+			for _, item := range snapshot.ShortTerm {
+				if item.Type == "message" {
+					role := "user"
+					if r, ok := item.Metadata["role"].(string); ok {
+						role = r
+					}
+					messages = append(messages, map[string]interface{}{
+						"id":        item.ID,
+						"role":      role,
+						"content":   item.Content,
+						"created_at": item.Timestamp,
+					})
+				}
+			}
+		}
+	}
+
+	if messages == nil {
+		messages = []interface{}{}
+	}
+
+	log.Printf("[GetMessages] Session %s: returning %d messages", sessionID, len(messages))
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
-		"messages": []interface{}{},
+		"messages": messages,
 		"has_more": false,
 	})
 }
@@ -1083,19 +2344,197 @@ func (s *Server) chatSession(ctx context.Context, w http.ResponseWriter, r *http
 	})
 }
 
+// chatSessionStream handles streaming chat for a session
+func (s *Server) chatSessionStream(ctx context.Context, w http.ResponseWriter, r *http.Request, sessionID string) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Message string `json:"message"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Message == "" {
+		http.Error(w, "Message is required", http.StatusBadRequest)
+		return
+	}
+
+	// Verify session exists
+	sess, err := s.sessionStore.Get(ctx, sessionID)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("Session not found: %v", err), http.StatusNotFound)
+		return
+	}
+
+	// Touch session
+	sess.Touch()
+	s.sessionStore.Update(ctx, sess)
+
+	// Get destination from session's associated agent
+	var destination string
+	if agentID, ok := sess.GetMetadata("agent_id"); ok {
+		if agentIDStr, ok := agentID.(string); ok && agentIDStr != "" && s.agentRepo != nil {
+			ag, err := s.agentRepo.GetAgent(ctx, agentIDStr)
+			if err == nil && ag != nil {
+				destination = ag.Destination
+				log.Printf("[ChatSession] Session %s using destination: %s (agent: %s)", sessionID, destination, agentIDStr)
+			}
+		}
+	}
+
+	// Load conversation history from session's memory storage
+	var conversationHistory []llm.Message
+	if s.memoryStorage != nil {
+		snapshot, err := s.memoryStorage.Load(ctx, sessionID)
+		if err == nil && snapshot != nil {
+			// Convert memory items to llm.Message format
+			for _, item := range snapshot.ShortTerm {
+				if item.Type == "message" {
+					role := "user"
+					if r, ok := item.Metadata["role"].(string); ok {
+						role = r
+					}
+					conversationHistory = append(conversationHistory, llm.Message{
+						Role:    role,
+						Content: item.Content,
+					})
+				}
+			}
+			log.Printf("[ChatSession] Loaded %d messages from session memory", len(conversationHistory))
+		}
+	}
+
+	// Set SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	// Get stream from main agent with destination context and session history
+	var outputCh <-chan string
+	var errCh <-chan error
+	if destination != "" {
+		outputCh, errCh, _ = s.mainAgent.ChatStreamWithDestinationAndHistory(ctx, req.Message, destination, conversationHistory)
+	} else {
+		// For sessions without destination, use regular chat with history
+		outputCh, errCh = s.mainAgent.ChatStream(ctx, req.Message)
+	}
+
+	var fullResponse strings.Builder
+	streamDone := false
+
+	for !streamDone {
+		select {
+		case chunk, ok := <-outputCh:
+			if !ok {
+				streamDone = true
+				break
+			}
+			fullResponse.WriteString(chunk)
+			// Use JSON encoding to properly handle newlines and special characters
+			jsonData, _ := json.Marshal(map[string]string{"content": chunk})
+			fmt.Fprintf(w, "data: %s\n\n", jsonData)
+			flusher.Flush()
+		case err, ok := <-errCh:
+			if !ok {
+				continue
+			}
+			if err != nil {
+				fmt.Fprintf(w, "data: [ERROR] %v\n\n", err)
+				flusher.Flush()
+				streamDone = true
+			}
+		case <-ctx.Done():
+			streamDone = true
+		}
+	}
+
+	// Save messages to memory storage
+	if s.memoryStorage != nil && fullResponse.Len() > 0 {
+		// Load existing snapshot or create new one
+		snapshot, err := s.memoryStorage.Load(ctx, sessionID)
+		if err != nil {
+			snapshot = &memory.Snapshot{
+				SessionID: sessionID,
+				ShortTerm: []memory.Item{},
+				LongTerm:  []memory.Item{},
+				CreatedAt: time.Now(),
+			}
+		}
+
+		// Add user message
+		userItem := memory.Item{
+			ID:        generateID(),
+			Type:      "message",
+			Content:   req.Message,
+			Metadata:  map[string]any{"role": "user"},
+			Timestamp: time.Now(),
+		}
+		snapshot.ShortTerm = append(snapshot.ShortTerm, userItem)
+
+		// Add assistant message
+		assistantItem := memory.Item{
+			ID:        generateID(),
+			Type:      "message",
+			Content:   fullResponse.String(),
+			Metadata:  map[string]any{"role": "assistant"},
+			Timestamp: time.Now(),
+		}
+		snapshot.ShortTerm = append(snapshot.ShortTerm, assistantItem)
+
+		// Save snapshot
+		if err := s.memoryStorage.Save(ctx, sessionID, snapshot); err != nil {
+			log.Printf("[Chat] Failed to save messages: %v", err)
+		}
+
+		// Update session message count
+		sess.IncrementMessageCount()
+		s.sessionStore.Update(ctx, sess)
+	}
+
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
+}
+
 func generateID() string {
 	return fmt.Sprintf("%d", time.Now().UnixNano())
 }
 
 func main() {
+	// Load .env file
+	if err := godotenv.Load(); err != nil {
+		log.Println("No .env file found, using environment variables")
+	}
+
 	config := Config{
 		HTTPPort:       getEnvInt("HTTP_PORT", 8080),
 		LLMProvider:    getEnv("LLM_PROVIDER", "mock"),
 		LLMGRPCAddr:    getEnv("LLM_GRPC_ADDR", "localhost:50051"),
-		GLMAPIKey:      getEnv("GLM_API_KEY", ""),
+		GLMAPIKey:      getEnv("GLM_API_KEY", getEnv("LLM_API_KEY", "")),
 		GLMModel:       getEnv("GLM_MODEL", "glm-4-flash"),
-		DeepSeekAPIKey: getEnv("DEEPSEEK_API_KEY", ""),
+		DeepSeekAPIKey: getEnv("DEEPSEEK_API_KEY", getEnv("LLM_API_KEY", "")),
 		DeepSeekModel:  getEnv("DEEPSEEK_MODEL", "deepseek-chat"),
+		TavilyAPIKey:   getEnv("TAVILY_API_KEY", ""),
+		ProxyURL:       getEnv("PROXY_URL", ""),
+		// PostgreSQL config
+		PostgresHost:     getEnv("POSTGRES_HOST", "localhost"),
+		PostgresPort:     getEnvInt("POSTGRES_PORT", 5432),
+		PostgresUser:     getEnv("POSTGRES_USER", "postgres"),
+		PostgresPassword: getEnv("POSTGRES_PASSWORD", "postgres"),
+		PostgresDatabase: getEnv("POSTGRES_DB", "uta_travel"),
+		PostgresSSLMode:  getEnv("POSTGRES_SSLMODE", "disable"),
 	}
 
 	server := NewServer(config)

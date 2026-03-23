@@ -22,6 +22,7 @@ type Session struct {
 	mu           sync.RWMutex
 	id           string
 	agentType    string
+	agentID      string // Associated agent ID (for destination context)
 	state        State
 	createdAt    time.Time
 	updatedAt    time.Time
@@ -78,6 +79,21 @@ func (s *Session) SetAgentType(agentType string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.agentType = agentType
+	s.updatedAt = time.Now()
+}
+
+// AgentID returns the associated agent ID
+func (s *Session) AgentID() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.agentID
+}
+
+// SetAgentID sets the associated agent ID
+func (s *Session) SetAgentID(agentID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentID = agentID
 	s.updatedAt = time.Now()
 }
 
@@ -210,6 +226,7 @@ func (s *Session) IdleDuration() time.Duration {
 type Snapshot struct {
 	ID           string         `json:"id"`
 	AgentType    string         `json:"agent_type"`
+	AgentID      string         `json:"agent_id,omitempty"` // Associated agent ID
 	State        State          `json:"state"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
@@ -232,6 +249,7 @@ func (s *Session) ToSnapshot() *Snapshot {
 	return &Snapshot{
 		ID:           s.id,
 		AgentType:    s.agentType,
+		AgentID:      s.agentID,
 		State:        s.state,
 		CreatedAt:    s.createdAt,
 		UpdatedAt:    s.updatedAt,
@@ -255,9 +273,18 @@ func FromSnapshot(snapshot *Snapshot) (*Session, error) {
 		}
 	}
 
+	// Extract agent_id from metadata if not directly in snapshot
+	agentID := snapshot.AgentID
+	if agentID == "" {
+		if aid, ok := metadata["agent_id"].(string); ok {
+			agentID = aid
+		}
+	}
+
 	return &Session{
 		id:           snapshot.ID,
 		agentType:    snapshot.AgentType,
+		agentID:      agentID,
 		state:        snapshot.State,
 		createdAt:    snapshot.CreatedAt,
 		updatedAt:    snapshot.UpdatedAt,

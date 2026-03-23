@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -25,6 +26,7 @@ type LLMAgent struct {
 	tools         ToolRegistry
 	maxIterations int
 	explorationLog []ExplorationStep // Track exploration for radar chart
+	collectedDocs  []map[string]any  // Collected documents from search tools
 }
 
 // LLMAgentConfig for creating an LLM-powered agent
@@ -69,6 +71,7 @@ func NewLLMAgent(config LLMAgentConfig) *LLMAgent {
 		tools:         config.Tools,
 		maxIterations: config.MaxIterations,
 		explorationLog: make([]ExplorationStep, 0),
+		collectedDocs:  make([]map[string]any, 0),
 	}
 }
 
@@ -194,6 +197,9 @@ func (a *LLMAgent) Run(ctx context.Context, goal string) (*AgentResult, error) {
 				})
 				explorationStep.Result = resultStr
 				explorationStep.DurationMs = execTime.Milliseconds()
+
+				// Collect documents from search tools
+				a.collectDocumentsFromResult(result, decision.ToolName)
 			}
 		}
 
@@ -218,15 +224,17 @@ func (a *LLMAgent) Run(ctx context.Context, goal string) (*AgentResult, error) {
 				Goal:      goal,
 				Success:   true,
 				Output: map[string]any{
-					"result":        decision.Result,
+					"result":          decision.Result,
 					"exploration_log": a.explorationLog,
+					"documents":       a.collectedDocs,
 				},
 				Duration: time.Since(startTime),
 				Metadata: map[string]any{
-					"iterations":   iteration,
-					"tokens_in":    totalTokensIn,
-					"tokens_out":   totalTokensOut,
-					"explorations": len(a.explorationLog),
+					"iterations":      iteration,
+					"tokens_in":       totalTokensIn,
+					"tokens_out":      totalTokensOut,
+					"explorations":    len(a.explorationLog),
+					"document_count":  len(a.collectedDocs),
 				},
 			}, nil
 		}
@@ -244,6 +252,7 @@ func (a *LLMAgent) Run(ctx context.Context, goal string) (*AgentResult, error) {
 		Output: map[string]any{
 			"result":          "达到最大迭代次数",
 			"exploration_log": a.explorationLog,
+			"documents":       a.collectedDocs,
 		},
 		Duration: time.Since(startTime),
 		Metadata: map[string]any{
@@ -369,4 +378,77 @@ func (a *LLMAgent) formatToolResult(result *ToolResult) string {
 	}
 
 	return fmt.Sprintf("%v", result.Data)
+}
+
+// collectDocumentsFromResult extracts documents from tool results
+func (a *LLMAgent) collectDocumentsFromResult(result *ToolResult, toolName string) {
+	if result == nil || result.Data == nil {
+		return
+	}
+
+	// Search tools typically return results in "results" field
+	searchTools := map[string]bool{
+		"brave_search":       true,
+		"tavily_search":      true,
+		"wikipedia_search":   true,
+		"baidu_baike_search": true,
+		"web_reader":         true,
+	}
+
+	if !searchTools[toolName] {
+		return
+	}
+
+	// Extract results array
+	data, ok := result.Data.(map[string]any)
+	if !ok {
+		return
+	}
+
+	resultsRaw, ok := data["results"]
+	if !ok {
+		return
+	}
+
+	// Convert to []map[string]any
+	var results []map[string]any
+	switch v := resultsRaw.(type) {
+	case []map[string]any:
+		results = v
+	case []any:
+		for _, item := range v {
+			if m, ok := item.(map[string]any); ok {
+				results = append(results, m)
+			}
+		}
+	}
+
+	// Add documents to collected docs
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	for _, r := range results {
+		// Create a document with relevant fields
+		doc := map[string]any{
+			"title":   getStringFromMap(r, "title"),
+			"content": getStringFromMap(r, "content"),
+			"url":     getStringFromMap(r, "url"),
+			"source":  getStringFromMap(r, "source"),
+		}
+
+		// Only add if we have meaningful content
+		if doc["content"] != "" && len(doc["content"].(string)) > 50 {
+			a.collectedDocs = append(a.collectedDocs, doc)
+		}
+	}
+
+	log.Printf("[LLMAgent] Collected %d documents from %s, total: %d", len(results), toolName, len(a.collectedDocs))
+}
+
+// getStringFromMap safely extracts a string from a map
+func getStringFromMap(m map[string]any, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
 }

@@ -27,6 +27,7 @@ type Storage interface {
 type ListOptions struct {
 	UserID     string
 	AgentType  string
+	AgentID    string // Filter by associated agent ID
 	State      State
 	Limit      int
 	Offset     int
@@ -251,6 +252,12 @@ func (s *PostgreSQLStorage) List(ctx context.Context, opts ListOptions) (*ListRe
 	if opts.AgentType != "" {
 		whereClauses = append(whereClauses, fmt.Sprintf("agent_type = $%d", argIdx))
 		args = append(args, opts.AgentType)
+		argIdx++
+	}
+
+	if opts.AgentID != "" {
+		whereClauses = append(whereClauses, fmt.Sprintf("metadata->>'agent_id' = $%d", argIdx))
+		args = append(args, opts.AgentID)
 		argIdx++
 	}
 

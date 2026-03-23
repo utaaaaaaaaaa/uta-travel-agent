@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
+	"log"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -224,8 +226,10 @@ func (a *MainAgent) ChatStream(ctx context.Context, message string) (<-chan stri
 	errCh := make(chan error, 1)
 
 	go func() {
-		defer close(outputCh)
-		defer close(errCh)
+		defer func() {
+			close(outputCh)
+			close(errCh)
+		}()
 
 		a.SetState(StateThinking)
 		defer a.SetState(StateIdle)
@@ -255,30 +259,46 @@ func (a *MainAgent) ChatStream(ctx context.Context, message string) (<-chan stri
 		chunkCh, streamErrCh := a.llmProvider.Stream(ctx, messagesWithSystem)
 
 		var fullResponse strings.Builder
+		streamDone := false
 
-		for {
+		for !streamDone {
 			select {
 			case chunk, ok := <-chunkCh:
 				if !ok {
-					// Stream finished, save full response to memory
+					// Stream channel closed, finish
 					a.Memory().AddMessage("assistant", fullResponse.String())
-					return
+					streamDone = true
+					break
 				}
 				if chunk.Content != "" {
 					fullResponse.WriteString(chunk.Content)
 					select {
 					case outputCh <- chunk.Content:
 					case <-ctx.Done():
-						return
+						streamDone = true
+						break
 					}
 				}
-			case err := <-streamErrCh:
+				// Check for Done signal
+				if chunk.Done {
+					a.Memory().AddMessage("assistant", fullResponse.String())
+					streamDone = true
+					break
+				}
+			case err, ok := <-streamErrCh:
+				if !ok {
+					// Error channel closed, stream finished
+					streamDone = true
+					break
+				}
 				if err != nil {
 					errCh <- err
+					streamDone = true
+					break
 				}
-				return
 			case <-ctx.Done():
-				return
+				streamDone = true
+				break
 			}
 		}
 	}()
@@ -377,6 +397,29 @@ func (a *MainAgent) RunParallelResearch(ctx context.Context, destination, theme 
 		allDocs = append(allDocs, r.Documents...)
 	}
 
+	// Aggregate exploration logs, tokens, and covered topics
+	var allExplorationLog []ExplorationStep
+	var totalTokensIn, totalTokensOut int
+	coveredTopics := make(map[string]int)
+
+	for _, r := range results {
+		// Aggregate tokens
+		totalTokensIn += r.TokensIn
+		totalTokensOut += r.TokensOut
+
+		// Aggregate exploration log
+		allExplorationLog = append(allExplorationLog, r.ExplorationLog...)
+
+		// Track covered topics - use English key for frontend compatibility
+		topicKey := TopicNameToKey(r.Topic.Name)
+		coveredTopics[topicKey] = len(r.Documents)
+	}
+
+	// Sort exploration log by timestamp
+	sort.Slice(allExplorationLog, func(i, j int) bool {
+		return allExplorationLog[i].Timestamp.Before(allExplorationLog[j].Timestamp)
+	})
+
 	return &ParallelResearchResult{
 		Destination:    destination,
 		Theme:          theme,
@@ -385,6 +428,10 @@ func (a *MainAgent) RunParallelResearch(ctx context.Context, destination, theme 
 		AllDocuments:   allDocs,
 		Errors:         errors,
 		Duration:       time.Since(startTime),
+		TotalTokensIn:  totalTokensIn,
+		TotalTokensOut: totalTokensOut,
+		ExplorationLog: allExplorationLog,
+		CoveredTopics:  coveredTopics,
 	}, nil
 }
 
@@ -397,20 +444,48 @@ type ResearchTopic struct {
 
 // ResearchTopicResult holds results for a single topic
 type ResearchTopicResult struct {
-	Topic     ResearchTopic
-	Documents []map[string]any
-	Error     error
+	Topic           ResearchTopic
+	Documents       []map[string]any
+	Error           error
+	ExplorationLog  []ExplorationStep
+	TokensIn        int
+	TokensOut       int
+	DurationMs      int64
 }
 
 // ParallelResearchResult holds results from parallel research
 type ParallelResearchResult struct {
-	Destination    string
-	Theme          string
-	Topics         []*ResearchTopicResult
-	TotalDocuments int
-	AllDocuments   []map[string]any
-	Errors         []error
-	Duration       time.Duration
+	Destination     string
+	Theme           string
+	Topics          []*ResearchTopicResult
+	TotalDocuments  int
+	AllDocuments    []map[string]any
+	Errors          []error
+	Duration        time.Duration
+	TotalTokensIn   int
+	TotalTokensOut  int
+	ExplorationLog  []ExplorationStep
+	CoveredTopics   map[string]int
+}
+
+// TopicNameToKey maps Chinese topic names to English keys for frontend
+func TopicNameToKey(name string) string {
+	mapping := map[string]string{
+		"景点":     "attractions",
+		"历史与文化":  "history",
+		"美食":     "food",
+		"交通":     "transport",
+		"文化景点":   "cultural",
+		"美食推荐":   "food",
+		"户外活动":   "adventure",
+		"艺术场所":   "art",
+		"住宿":     "accommodation",
+		"购物":     "shopping",
+	}
+	if key, ok := mapping[name]; ok {
+		return key
+	}
+	return name
 }
 
 // getResearchTopics returns research topics based on destination and theme
@@ -467,6 +542,7 @@ func (a *MainAgent) getResearchTopics(destination, theme string) []ResearchTopic
 
 // researchTopic executes research for a single topic
 func (a *MainAgent) researchTopic(ctx context.Context, topic ResearchTopic) *ResearchTopicResult {
+	startTime := time.Now()
 	result := &ResearchTopicResult{
 		Topic: topic,
 	}
@@ -485,18 +561,104 @@ func (a *MainAgent) researchTopic(ctx context.Context, topic ResearchTopic) *Res
 		return result
 	}
 
-	// Extract documents from result
+	// Record duration
+	result.DurationMs = time.Since(startTime).Milliseconds()
+
+	// Extract tokens from metadata
+	if agentResult != nil && agentResult.Metadata != nil {
+		if tokensIn, ok := agentResult.Metadata["tokens_in"].(int); ok {
+			result.TokensIn = tokensIn
+		}
+		if tokensOut, ok := agentResult.Metadata["tokens_out"].(int); ok {
+			result.TokensOut = tokensOut
+		}
+	}
+
+	// Extract exploration log from output
 	if agentResult != nil && agentResult.Output != nil {
-		if docs, ok := agentResult.Output.([]map[string]any); ok {
-			result.Documents = docs
-		} else if outputMap, ok := agentResult.Output.(map[string]any); ok {
+		log.Printf("[researchTopic] Agent result output type: %T", agentResult.Output)
+		if outputMap, ok := agentResult.Output.(map[string]any); ok {
+			// Extract documents
 			if docs, ok := outputMap["documents"].([]map[string]any); ok {
 				result.Documents = docs
+				log.Printf("[researchTopic] Extracted %d documents for topic %s", len(docs), topic.Name)
+			} else if docsAny, ok := outputMap["documents"].([]any); ok {
+				// Handle []any case and convert to []map[string]any
+				for _, d := range docsAny {
+					if m, ok := d.(map[string]any); ok {
+						result.Documents = append(result.Documents, m)
+					}
+				}
+				log.Printf("[researchTopic] Converted %d documents from []any for topic %s", len(result.Documents), topic.Name)
+			} else {
+				log.Printf("[researchTopic] documents key not found or wrong type, keys: %v", getKeys(outputMap))
+			}
+
+			// Extract exploration log
+			if explorationLog, ok := outputMap["exploration_log"].([]ExplorationStep); ok {
+				result.ExplorationLog = explorationLog
+			} else if explorationLogAny, ok := outputMap["exploration_log"].([]any); ok {
+				// Convert []any to []ExplorationStep
+				for _, step := range explorationLogAny {
+					if stepMap, ok := step.(map[string]any); ok {
+						es := ExplorationStep{}
+						if ts, ok := stepMap["timestamp"].(string); ok {
+							if t, err := time.Parse(time.RFC3339, ts); err == nil {
+								es.Timestamp = t
+							}
+						} else if t, ok := stepMap["timestamp"].(time.Time); ok {
+							es.Timestamp = t
+						}
+						if d, ok := stepMap["direction"].(string); ok {
+							es.Direction = d
+						}
+						if th, ok := stepMap["thought"].(string); ok {
+							es.Thought = th
+						}
+						if ac, ok := stepMap["action"].(string); ok {
+							es.Action = ac
+						}
+						if tn, ok := stepMap["tool_name"].(string); ok {
+							es.ToolName = tn
+						}
+						if r, ok := stepMap["result"].(string); ok {
+							es.Result = r
+						}
+						if ti, ok := stepMap["tokens_in"].(int); ok {
+							es.TokensIn = ti
+						} else if ti, ok := stepMap["tokens_in"].(float64); ok {
+							es.TokensIn = int(ti)
+						}
+						if to, ok := stepMap["tokens_out"].(int); ok {
+							es.TokensOut = to
+						} else if to, ok := stepMap["tokens_out"].(float64); ok {
+							es.TokensOut = int(to)
+						}
+						if dm, ok := stepMap["duration_ms"].(int64); ok {
+							es.DurationMs = dm
+						} else if dm, ok := stepMap["duration_ms"].(int); ok {
+							es.DurationMs = int64(dm)
+						} else if dm, ok := stepMap["duration_ms"].(float64); ok {
+							es.DurationMs = int64(dm)
+						}
+						result.ExplorationLog = append(result.ExplorationLog, es)
+					}
+				}
+				log.Printf("[researchTopic] Extracted %d exploration steps for topic %s", len(result.ExplorationLog), topic.Name)
 			}
 		}
 	}
 
 	return result
+}
+
+// getKeys returns keys from a map
+func getKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
 }
 
 // SetAllSubagentTools sets the tool registry for all registered subagents
@@ -587,6 +749,262 @@ func (a *MainAgent) getSystemPrompt() string {
 你的任务是为用户提供专业、友好的旅游建议和信息。
 请用清晰、有组织的格式回答问题。
 如果用户想创建一个目的地Agent，告诉他们可以输入"创建 [目的地名] Agent"。`
+}
+
+// getGuideSystemPrompt returns a destination-specific system prompt
+func (a *MainAgent) getGuideSystemPrompt(destination string) string {
+	if destination == "" {
+		return a.getSystemPrompt()
+	}
+	return fmt.Sprintf(`你是 %s 的专业导游助手。
+
+你的职责:
+1. 为游客提供专业、友好的导游服务
+2. 介绍景点的历史背景、文化意义和游览建议
+3. 推荐当地美食、特色体验
+4. 解答游客关于 %s 的各种问题
+
+重要规则:
+- 你是 %s 的导游，当用户问"当地"、"这里"时，指的是 %s
+- 不需要询问用户位置，你已经知道用户要游览 %s
+- 使用生动的语言，像一位本地导游
+- 提供实用的建议和有趣的故事
+- 如果知道具体信息，给出准确的数据（开放时间、门票价格等）
+
+【输出格式要求 - 必须严格遵守】
+你必须使用标准 Markdown 格式输出，具体要求：
+
+1. 标题格式：
+   - 一级标题: # 标题内容
+   - 二级标题: ## 标题内容
+   - 三级标题: ### 标题内容
+   - 标题前后必须有换行
+
+2. 表格格式（用于对比信息）：
+   | 列1 | 列2 | 列3 |
+   |-----|-----|-----|
+   | 内容 | 内容 | 内容 |
+   - 表格前后必须有换行
+   - 分隔行使用 |---|---| 格式
+
+3. 列表格式：
+   - 无序列表: - 项目内容 （推荐使用）
+   - 有序列表: 1. 项目内容
+   - 列表项之间不需要空行
+
+【重要禁止事项】
+- 不要使用数字编号（1. 2. 3.）作为标题或段落开头
+- 不要延续之前对话的数字编号
+- 如果要表示顺序，使用 emoji（1️⃣ 2️⃣ 3️⃣）或无序列表（-）
+- 每个新回复都应该是独立的内容，不要引用或继续之前的编号
+
+4. 强调格式：
+   - **粗体** 用于强调重点
+   - *斜体* 用于术语或特指
+
+5. 分隔线：
+   - 使用 --- 分隔不同部分
+   - 分隔线前后必须有换行
+
+示例输出格式：
+
+# 🍜 %s美食全攻略
+
+%s美食以"鲜、甜、细、雅"著称...
+
+---
+
+## 必吃美食榜
+
+| 菜品 | 特点 | 推荐餐厅 |
+|------|------|----------|
+| 松鼠鳜鱼 | 外酥里嫩 | 松鹤楼 |
+
+---
+
+### 街头小吃
+
+- **生煎馒头**: 底部焦脆...
+- **糖粥**: 赤豆甜糯...
+
+请用热情、专业的态度为游客服务！`, destination, destination, destination, destination, destination, destination, destination)
+}
+
+// ChatStreamWithDestination streams a chat response with destination context
+func (a *MainAgent) ChatStreamWithDestination(ctx context.Context, message, destination string) (<-chan string, <-chan error) {
+	outputCh := make(chan string, 10)
+	errCh := make(chan error, 1)
+
+	go func() {
+		defer func() {
+			close(outputCh)
+			close(errCh)
+		}()
+
+		a.SetState(StateThinking)
+		defer a.SetState(StateIdle)
+
+		if a.llmProvider == nil {
+			errCh <- fmt.Errorf("no LLM provider configured")
+			return
+		}
+
+		// Get conversation history
+		history := a.Memory().GetConversationHistory()
+		messages := make([]llm.Message, len(history)+1)
+		for i, h := range history {
+			messages[i] = llm.Message{Role: h.Role, Content: h.Content}
+		}
+		messages[len(history)] = llm.Message{Role: "user", Content: message}
+
+		// Add to memory
+		a.Memory().AddMessage("user", message)
+
+		// Get destination-specific system prompt
+		systemPrompt := a.getGuideSystemPrompt(destination)
+		messagesWithSystem := make([]llm.Message, 0, len(messages)+1)
+		messagesWithSystem = append(messagesWithSystem, llm.Message{Role: "system", Content: systemPrompt})
+		messagesWithSystem = append(messagesWithSystem, messages...)
+
+		// Stream from LLM
+		chunkCh, streamErrCh := a.llmProvider.Stream(ctx, messagesWithSystem)
+
+		var fullResponse strings.Builder
+		streamDone := false
+
+		for !streamDone {
+			select {
+			case chunk, ok := <-chunkCh:
+				if !ok {
+					// Stream channel closed, finish
+					a.Memory().AddMessage("assistant", fullResponse.String())
+					streamDone = true
+					break
+				}
+				if chunk.Content != "" {
+					fullResponse.WriteString(chunk.Content)
+					select {
+					case outputCh <- chunk.Content:
+					case <-ctx.Done():
+						streamDone = true
+						break
+					}
+				}
+				// Check for Done signal
+				if chunk.Done {
+					a.Memory().AddMessage("assistant", fullResponse.String())
+					streamDone = true
+					break
+				}
+			case err, ok := <-streamErrCh:
+				if !ok {
+					// Error channel closed, stream finished
+					streamDone = true
+					break
+				}
+				if err != nil {
+					errCh <- err
+					streamDone = true
+					break
+				}
+			case <-ctx.Done():
+				streamDone = true
+				break
+			}
+		}
+	}()
+
+	return outputCh, errCh
+}
+
+// ChatStreamWithDestinationAndHistory streams a response with destination context and external conversation history
+// This is used by sessions which manage their own memory separately
+func (a *MainAgent) ChatStreamWithDestinationAndHistory(ctx context.Context, message, destination string, history []llm.Message) (<-chan string, <-chan error, []llm.Message) {
+	outputCh := make(chan string, 10)
+	errCh := make(chan error, 1)
+	updatedHistory := make([]llm.Message, 0)
+
+	go func() {
+		defer func() {
+			close(outputCh)
+			close(errCh)
+		}()
+
+		a.SetState(StateThinking)
+		defer a.SetState(StateIdle)
+
+		if a.llmProvider == nil {
+			errCh <- fmt.Errorf("no LLM provider configured")
+			return
+		}
+
+		// Build messages from provided history
+		messages := make([]llm.Message, len(history)+1)
+		copy(messages, history)
+		messages[len(history)] = llm.Message{Role: "user", Content: message}
+
+		// Get destination-specific system prompt
+		systemPrompt := a.getGuideSystemPrompt(destination)
+		messagesWithSystem := make([]llm.Message, 0, len(messages)+1)
+		messagesWithSystem = append(messagesWithSystem, llm.Message{Role: "system", Content: systemPrompt})
+		messagesWithSystem = append(messagesWithSystem, messages...)
+
+		// Stream from LLM
+		chunkCh, streamErrCh := a.llmProvider.Stream(ctx, messagesWithSystem)
+
+		var fullResponse strings.Builder
+		streamDone := false
+
+		for !streamDone {
+			select {
+			case chunk, ok := <-chunkCh:
+				if !ok {
+					// Stream channel closed, finish
+					streamDone = true
+					break
+				}
+				if chunk.Content != "" {
+					fullResponse.WriteString(chunk.Content)
+					select {
+					case outputCh <- chunk.Content:
+					case <-ctx.Done():
+						streamDone = true
+						break
+					}
+				}
+				// Check for Done signal
+				if chunk.Done {
+					streamDone = true
+					break
+				}
+			case err, ok := <-streamErrCh:
+				if !ok {
+					// Error channel closed, stream finished
+					streamDone = true
+					break
+				}
+				if err != nil {
+					errCh <- err
+					streamDone = true
+					break
+				}
+			case <-ctx.Done():
+				streamDone = true
+				break
+			}
+		}
+
+		// Return updated history (for caller to save)
+		updatedHistory = append(history, llm.Message{Role: "user", Content: message})
+		updatedHistory = append(updatedHistory, llm.Message{Role: "assistant", Content: fullResponse.String()})
+	}()
+
+	// Wait for goroutine to complete and return updated history
+	go func() {
+		<-ctx.Done()
+	}()
+
+	return outputCh, errCh, updatedHistory
 }
 
 // Helper functions to detect request type

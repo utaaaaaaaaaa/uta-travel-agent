@@ -5,6 +5,7 @@ export type SessionState = "active" | "paused" | "archived";
 export interface Session {
   id: string;
   agent_type: "main" | "guide" | "planner";
+  agent_id?: string; // For guide sessions, the associated agent ID
   title: string;
   state: SessionState;
   created_at: string;
