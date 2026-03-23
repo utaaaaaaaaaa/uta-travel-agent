@@ -41,6 +41,7 @@ type Engineer struct {
 	useGSSC     bool
 	gsscConfig  ContextConfig
 	ragService  RAGService
+	semanticMem SemanticMemoryService
 
 	mu         sync.RWMutex
 	priorities map[string]Priority
@@ -76,6 +77,13 @@ func (e *Engineer) SetRAGService(service RAGService) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	e.ragService = service
+}
+
+// SetSemanticMemory sets the semantic memory service for GSSC pipeline
+func (e *Engineer) SetSemanticMemory(sm SemanticMemoryService) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.semanticMem = sm
 }
 
 // SetGSSCConfig sets the GSSC configuration
@@ -441,6 +449,11 @@ func (e *Engineer) BuildContextWithGSSC(mem *memory.PersistentMemory, query stri
 
 	// Create GSSC pipeline
 	pipeline := NewGSSCPipeline(e.gsscConfig, mem, e.ragService, e.llmProvider)
+
+	// Set semantic memory if available
+	if e.semanticMem != nil {
+		pipeline.SetSemanticMemory(e.semanticMem)
+	}
 
 	// Build context using GSSC
 	return pipeline.BuildContextWithGSSC(mem, query, maxTokens)

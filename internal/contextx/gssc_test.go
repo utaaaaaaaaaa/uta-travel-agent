@@ -492,3 +492,141 @@ func TestRecencyScoreDecay(t *testing.T) {
 		})
 	}
 }
+
+// MockSemanticMemoryService implements SemanticMemoryService for testing
+type MockSemanticMemoryService struct {
+	results []memory.MemoryItem
+	err     error
+}
+
+func (m *MockSemanticMemoryService) Retrieve(ctx context.Context, query string, limit int) ([]memory.MemoryItem, error) {
+	return m.results, m.err
+}
+
+func TestGSSCPipelineWithSemanticMemory(t *testing.T) {
+	config := DefaultContextConfig()
+	pipeline := NewGSSCPipeline(config, nil, nil, nil)
+
+	// Set mock semantic memory
+	mockSemantic := &MockSemanticMemoryService{
+		results: []memory.MemoryItem{
+			{
+				ID:      "sem-1",
+				Content: "Tokyo Tower is a famous landmark in Tokyo, Japan.",
+				Entities: []memory.ExtractedEntity{
+					{Name: "Tokyo Tower", Type: "landmark", Confidence: 0.9},
+					{Name: "Tokyo", Type: "destination", Confidence: 0.95},
+				},
+			},
+			{
+				ID:      "sem-2",
+				Content: "Mount Fuji is Japan's highest mountain.",
+				Entities: []memory.ExtractedEntity{
+					{Name: "Mount Fuji", Type: "landmark", Confidence: 0.95},
+				},
+			},
+		},
+	}
+	pipeline.SetSemanticMemory(mockSemantic)
+
+	// Gather context
+	packets := pipeline.Gather("Tokyo attractions", nil)
+
+	// Verify semantic memory packet was added
+	foundSemantic := false
+	for _, pkt := range packets {
+		if pkt.Source == "semantic_memory" {
+			foundSemantic = true
+			if !contains(pkt.Content, "语义记忆检索") {
+				t.Error("expected semantic memory header in content")
+			}
+			if !contains(pkt.Content, "Tokyo Tower") {
+				t.Error("expected Tokyo Tower in semantic memory content")
+			}
+			break
+		}
+	}
+
+	if !foundSemantic {
+		t.Error("expected semantic memory packet in gather results")
+	}
+}
+
+func TestGSSCPipelineSemanticMemoryWithEntities(t *testing.T) {
+	config := DefaultContextConfig()
+	pipeline := NewGSSCPipeline(config, nil, nil, nil)
+
+	// Set mock semantic memory with entities
+	mockSemantic := &MockSemanticMemoryService{
+		results: []memory.MemoryItem{
+			{
+				ID:      "sem-1",
+				Content: "Kyoto has many temples.",
+				Entities: []memory.ExtractedEntity{
+					{Name: "Kyoto", Type: "destination", Confidence: 0.9},
+					{Name: "temples", Type: "attraction", Confidence: 0.85},
+				},
+			},
+		},
+	}
+	pipeline.SetSemanticMemory(mockSemantic)
+
+	// Gather context
+	packets := pipeline.Gather("Kyoto", nil)
+
+	// Find semantic memory packet
+	var semanticPkt *ContextPacket
+	for _, pkt := range packets {
+		if pkt.Source == "semantic_memory" {
+			semanticPkt = pkt
+			break
+		}
+	}
+
+	if semanticPkt == nil {
+		t.Fatal("expected semantic memory packet")
+	}
+
+	// Verify entities are included in content
+	if !contains(semanticPkt.Content, "实体:") {
+		t.Error("expected entities section in semantic memory content")
+	}
+	if !contains(semanticPkt.Content, "Kyoto(destination)") {
+		t.Error("expected Kyoto entity in content")
+	}
+}
+
+func TestGSSCPipelineSemanticMemoryError(t *testing.T) {
+	config := DefaultContextConfig()
+	pipeline := NewGSSCPipeline(config, nil, nil, nil)
+
+	// Set mock semantic memory that returns error
+	mockSemantic := &MockSemanticMemoryService{
+		err: context.DeadlineExceeded,
+	}
+	pipeline.SetSemanticMemory(mockSemantic)
+
+	// Gather context should not fail even if semantic memory fails
+	packets := pipeline.Gather("test query", nil)
+
+	// Should have no semantic memory packet
+	for _, pkt := range packets {
+		if pkt.Source == "semantic_memory" {
+			t.Error("expected no semantic memory packet on error")
+		}
+	}
+}
+
+// Helper function
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && (s == substr || len(s) > len(substr) && containsHelper(s, substr))
+}
+
+func containsHelper(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

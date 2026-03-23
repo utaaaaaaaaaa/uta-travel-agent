@@ -4,6 +4,7 @@ package contextx
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 	"sync"
@@ -40,13 +41,19 @@ type NoteService interface {
 	Search(ctx context.Context, query string, noteType string, tags []string, limit int) ([]*tools.Note, error)
 }
 
+// SemanticMemoryService interface for semantic memory operations
+type SemanticMemoryService interface {
+	Retrieve(ctx context.Context, query string, limit int) ([]memory.MemoryItem, error)
+}
+
 // GSSCPipeline implements the Gather-Select-Structure-Compress pipeline
 type GSSCPipeline struct {
-	config      ContextConfig
-	memory      *memory.PersistentMemory
-	ragService  RAGService
-	llmProvider llm.Provider
-	noteService NoteService
+	config           ContextConfig
+	memory           *memory.PersistentMemory
+	ragService       RAGService
+	llmProvider      llm.Provider
+	noteService      NoteService
+	semanticMemory   SemanticMemoryService
 
 	mu       sync.RWMutex
 	cache    map[string][]*ContextPacket
@@ -72,6 +79,13 @@ func (p *GSSCPipeline) SetNoteService(ns NoteService) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.noteService = ns
+}
+
+// SetSemanticMemory sets the semantic memory service for the pipeline
+func (p *GSSCPipeline) SetSemanticMemory(sm SemanticMemoryService) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.semanticMemory = sm
 }
 
 // Gather collects context packets from multiple sources
@@ -158,6 +172,52 @@ func (p *GSSCPipeline) Gather(query string, mem *memory.PersistentMemory) []*Con
 					WithMetadata("note_id", note.ID),
 				))
 			}
+		}
+	}
+
+	// 4.6 Semantic Memory (hybrid vector + graph retrieval)
+	if p.semanticMemory != nil && query != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+
+		results, err := p.semanticMemory.Retrieve(ctx, query, 5)
+		if err == nil && len(results) > 0 {
+			var semContent strings.Builder
+			semContent.WriteString("[语义记忆检索]\n")
+
+			for i, item := range results {
+				if i > 0 {
+					semContent.WriteString("\n---\n")
+				}
+
+				// Add content
+				if len(item.Content) > 300 {
+					semContent.WriteString(item.Content[:300] + "...")
+				} else {
+					semContent.WriteString(item.Content)
+				}
+
+				// Add extracted entities if available
+				if len(item.Entities) > 0 {
+					semContent.WriteString("\n[实体: ")
+					for j, e := range item.Entities {
+						if j > 0 {
+							semContent.WriteString(", ")
+						}
+						semContent.WriteString(fmt.Sprintf("%s(%s)", e.Name, e.Type))
+					}
+					semContent.WriteString("]")
+				}
+			}
+
+			packets = append(packets, NewContextPacket(
+				semContent.String(),
+				PacketTypeLongTerm,
+				WithRelevance(0.85),
+				WithSource("semantic_memory"),
+			))
+
+			log.Printf("[GSSC] Semantic memory retrieved %d items for query: %s", len(results), query)
 		}
 	}
 
