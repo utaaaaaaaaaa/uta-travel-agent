@@ -14,11 +14,16 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/utaaa/uta-travel-agent/internal/agent"
+	"github.com/utaaa/uta-travel-agent/internal/grpc/clients"
 	"github.com/utaaa/uta-travel-agent/internal/llm"
 	"github.com/utaaa/uta-travel-agent/internal/memory"
+	"github.com/utaaa/uta-travel-agent/internal/rag"
 	"github.com/utaaa/uta-travel-agent/internal/session"
 	"github.com/utaaa/uta-travel-agent/internal/storage/postgres"
+	"github.com/utaaa/uta-travel-agent/internal/storage/qdrant"
 	"github.com/utaaa/uta-travel-agent/internal/tools"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // ToolExecutorAdapter wraps a simple Execute function to implement agent.ToolExecutor
@@ -448,11 +453,129 @@ func (s *MemorySessionStore) ListByAgentType(ctx context.Context, agentType stri
 
 // Server is the main API server
 type Server struct {
-	mainAgent     *agent.MainAgent
-	httpPort      int
-	sessionStore  session.Storage  // 使用接口，支持 PostgreSQL 持久化
-	memoryStorage session.MemoryStorage  // 消息持久化存储
-	agentRepo     AgentRepository
+	mainAgent       *agent.MainAgent
+	httpPort        int
+	sessionStore    session.Storage  // 使用接口，支持 PostgreSQL 持久化
+	memoryStorage   session.MemoryStorage  // 消息持久化存储
+	agentRepo       AgentRepository
+
+	// User-scoped memory cache for cross-session preferences
+	// Key: userID, Value: *memory.PersistentMemory
+	userMemoryCache sync.Map
+	memoryStorageBackend *memoryStorageAdapter  // Adapter for memory.Storage interface
+}
+
+// memoryStorageAdapter adapts session.MemoryStorage to memory.Storage interface
+type memoryStorageAdapter struct {
+	backend session.MemoryStorage
+}
+
+func (a *memoryStorageAdapter) Save(ctx context.Context, sessionID string, snapshot *memory.Snapshot) error {
+	return a.backend.Save(ctx, sessionID, snapshot)
+}
+
+func (a *memoryStorageAdapter) Load(ctx context.Context, sessionID string) (*memory.Snapshot, error) {
+	return a.backend.Load(ctx, sessionID)
+}
+
+func (a *memoryStorageAdapter) Delete(ctx context.Context, sessionID string) error {
+	return a.backend.Delete(ctx, sessionID)
+}
+
+// ragServiceAdapter adapts rag.Service to agent.RAGService interface
+type ragServiceAdapter struct {
+	*rag.Service
+}
+
+func (a *ragServiceAdapter) Query(ctx context.Context, collectionID, query string, limit int) (*agent.RAGResult, error) {
+	result, err := a.Service.Query(ctx, collectionID, query, limit)
+	if err != nil {
+		return nil, err
+	}
+	if result == nil {
+		return nil, nil
+	}
+
+	// Convert rag.QueryResult to agent.RAGResult
+	agentResult := &agent.RAGResult{
+		Answer:  result.Answer,
+		Sources: make([]string, len(result.Sources)),
+		Score:   float64(result.TokensUsed),
+	}
+
+	for i, src := range result.Sources {
+		agentResult.Sources[i] = src.Content
+	}
+
+	return agentResult, nil
+}
+
+// getUserMemory returns or creates a user-scoped PersistentMemory for cross-session preferences.
+// The userID is used as the key prefix for storing long-term memory items.
+// If userID is empty, returns nil (no user-scoped memory available).
+func (s *Server) getUserMemory(userID string) *memory.PersistentMemory {
+	if userID == "" {
+		return nil
+	}
+
+	// Check cache first
+	if cached, ok := s.userMemoryCache.Load(userID); ok {
+		return cached.(*memory.PersistentMemory)
+	}
+
+	// Create new user-scoped memory with storage backend
+	userMemKey := "user:" + userID
+	userMem := memory.NewPersistentMemory(s.memoryStorageBackend, 100)
+
+	// Load existing long-term memory from storage if available
+	if s.memoryStorageBackend != nil {
+		ctx := context.Background()
+		if snapshot, err := s.memoryStorageBackend.Load(ctx, userMemKey); err == nil {
+			// Restore long-term memory from snapshot
+			for _, item := range snapshot.LongTerm {
+				userMem.AddToLongTerm(item)
+			}
+			log.Printf("[Memory] Loaded %d long-term items for user %s", len(snapshot.LongTerm), userID)
+		}
+	}
+
+	// Cache the memory
+	s.userMemoryCache.Store(userID, userMem)
+	return userMem
+}
+
+// saveUserMemory persists user-scoped memory to storage.
+// This should be called after updating user preferences.
+// It ensures a user session record exists before saving to satisfy foreign key constraints.
+func (s *Server) saveUserMemory(userID string, mem *memory.PersistentMemory) {
+	if userID == "" || mem == nil || s.memoryStorageBackend == nil {
+		return
+	}
+
+	userMemKey := "user:" + userID
+	ctx := context.Background()
+
+	// Ensure user session record exists (required for foreign key constraint)
+	// This creates a special "user preferences" session that persists across all user's sessions
+	if s.sessionStore != nil {
+		userSession, err := s.sessionStore.Get(ctx, userMemKey)
+		if err != nil || userSession == nil {
+			// Create new user session for preferences storage
+			userSession = session.New(userMemKey)
+			userSession.SetMetadata("type", "user_preferences")
+			userSession.SetMetadata("user_id", userID)
+			if err := s.sessionStore.Create(ctx, userSession); err != nil {
+				log.Printf("[Memory] Failed to create user session for %s: %v", userID, err)
+				// Continue anyway - the save might still work if session exists
+			} else {
+				log.Printf("[Memory] Created user session for %s", userID)
+			}
+		}
+	}
+
+	if err := mem.Save(ctx, userMemKey); err != nil {
+		log.Printf("[Memory] Failed to save user memory for %s: %v", userID, err)
+	}
 }
 
 // AgentRepository interface for agent persistence
@@ -627,6 +750,8 @@ type Config struct {
 	PostgresPassword string
 	PostgresDatabase string
 	PostgresSSLMode  string
+	// Feature flags
+	EnableRAG bool // Enable RAG knowledge retrieval
 }
 
 // getEnv gets environment variable with default value
@@ -642,6 +767,15 @@ func getEnvInt(key string, defaultValue int) int {
 	if value := os.Getenv(key); value != "" {
 		if i, err := strconv.Atoi(value); err == nil {
 			return i
+		}
+	}
+	return defaultValue
+}
+
+func getEnvBool(key string, defaultValue bool) bool {
+	if value := os.Getenv(key); value != "" {
+		if b, err := strconv.ParseBool(value); err == nil {
+			return b
 		}
 	}
 	return defaultValue
@@ -712,10 +846,41 @@ func NewServer(config Config) *Server {
 		llmProvider = llm.NewMockProvider("gRPC LLM 服务连接中...")
 	}
 
-	// Create main agent
+	// Create RAG service with Qdrant (only if enabled)
+	var ragService agent.RAGService
+	if config.EnableRAG {
+		qdrantClient, err := qdrant.NewClient(qdrant.Config{
+			Host: "localhost",
+			Port: 6334, // Qdrant gRPC port
+		})
+		if err != nil {
+			log.Printf("Failed to create Qdrant client: %v, RAG will be disabled", err)
+		} else {
+			// Create embedding client
+			embeddingAddr := getEnv("EMBEDDING_ADDR", "localhost:50052")
+			embeddingConn, err := grpc.NewClient(embeddingAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err != nil {
+				log.Printf("Failed to connect to embedding service: %v, RAG will be disabled", err)
+			} else {
+				embeddingClient := clients.NewEmbeddingClient(embeddingConn)
+				ragSvc := rag.NewService(rag.Config{
+					QdrantClient:    qdrantClient,
+					LLMProvider:     llmProvider,
+					EmbeddingClient: embeddingClient,
+				})
+				ragService = &ragServiceAdapter{ragSvc}
+				log.Printf("RAG service initialized with Qdrant and Embedding service at %s", embeddingAddr)
+			}
+		}
+	} else {
+		log.Println("RAG is disabled (set ENABLE_RAG=true to enable)")
+	}
+
+	// Create main agent with RAG support
 	mainAgent := agent.NewMainAgent(agent.MainAgentConfig{
 		ID:          "main-agent-001",
 		LLMProvider: llmProvider,
+		RAGService:  ragService,
 		Template: &agent.AgentTemplate{
 			Name:         "UTA Main Agent",
 			Description:  "Main orchestrator agent for UTA Travel",
@@ -879,11 +1044,12 @@ func NewServer(config Config) *Server {
 	}
 
 	return &Server{
-		mainAgent:     mainAgent,
-		httpPort:      config.HTTPPort,
-		sessionStore:  sessionStore,
-		memoryStorage: memoryStorage,
-		agentRepo:     agentRepo,
+		mainAgent:            mainAgent,
+		httpPort:             config.HTTPPort,
+		sessionStore:         sessionStore,
+		memoryStorage:        memoryStorage,
+		agentRepo:            agentRepo,
+		memoryStorageBackend: &memoryStorageAdapter{backend: memoryStorage},
 	}
 }
 
@@ -1772,20 +1938,35 @@ func (s *Server) chatStreamWithAgent(ctx context.Context, w http.ResponseWriter,
 		return
 	}
 
-	// Get agent info to retrieve destination
+	// Get agent info to retrieve destination and user_id
 	var destination string
+	var userID string
 	if s.agentRepo != nil {
 		ag, err := s.agentRepo.GetAgent(ctx, agentID)
 		if err == nil && ag != nil {
 			destination = ag.Destination
-			log.Printf("[Chat] Agent %s destination: %s", agentID, destination)
+			userID = ag.UserID
+			log.Printf("[Chat] Agent %s destination: %s, user: %s", agentID, destination, userID)
 		}
+	}
+
+	// Get user-scoped memory for cross-session preferences
+	// Use default user if agent's user_id is empty
+	effectiveUserID := userID
+	if effectiveUserID == "" {
+		effectiveUserID = "default"
+		log.Printf("[Chat] Agent has no user_id, using default user")
+	}
+	userMem := s.getUserMemory(effectiveUserID)
+	if userMem != nil {
+		log.Printf("[Chat] Loaded user memory for user %s", effectiveUserID)
 	}
 
 	// Get stream from main agent with destination context
 	// Use empty history to avoid cross-contamination between different agents
 	// Each agent should have its own conversation context
-	outputCh, errCh, _ := s.mainAgent.ChatStreamWithDestinationAndHistory(ctx, req.Message, destination, []llm.Message{})
+	// Pass user memory for preferences
+	outputCh, errCh, _ := s.mainAgent.ChatStreamWithDestinationAndHistory(ctx, req.Message, destination, []llm.Message{}, userMem)
 
 	var fullResponse strings.Builder
 	streamDone := false
@@ -1820,6 +2001,12 @@ func (s *Server) chatStreamWithAgent(ctx context.Context, w http.ResponseWriter,
 	// Send done event
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+
+	// Save user-scoped memory (preferences) after chat completes
+	if userMem != nil && effectiveUserID != "" {
+		s.saveUserMemory(effectiveUserID, userMem)
+		log.Printf("[Chat] Saved user memory for user %s", effectiveUserID)
+	}
 }
 
 // handleTaskByID handles task status and streaming
@@ -2094,7 +2281,10 @@ func (s *Server) listSessions(ctx context.Context, w http.ResponseWriter, r *htt
 	// Support agent_id filtering
 	agentID := r.URL.Query().Get("agent_id")
 
-	opts := session.ListOptions{Limit: limit}
+	opts := session.ListOptions{
+		Limit:      limit,
+		Descending: true, // Show most recent sessions first
+	}
 	if agentID != "" {
 		opts.AgentID = agentID
 	}
@@ -2105,8 +2295,26 @@ func (s *Server) listSessions(ctx context.Context, w http.ResponseWriter, r *htt
 		return
 	}
 
+	// Filter out user-type sessions (used only for storing preferences)
+	filtered := session.ListResult{
+		Sessions: make([]*session.Session, 0),
+		Grouped:  make(map[string][]*session.Session),
+	}
+	for _, sess := range result.Sessions {
+		if sess.AgentType() != "user" {
+			filtered.Sessions = append(filtered.Sessions, sess)
+		}
+	}
+	for key, sessions := range result.Grouped {
+		for _, sess := range sessions {
+			if sess.AgentType() != "user" {
+				filtered.Grouped[key] = append(filtered.Grouped[key], sess)
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	json.NewEncoder(w).Encode(filtered)
 }
 
 func (s *Server) createSession(ctx context.Context, w http.ResponseWriter, r *http.Request) {
@@ -2325,12 +2533,99 @@ func (s *Server) chatSession(ctx context.Context, w http.ResponseWriter, r *http
 	sess.Touch()
 	s.sessionStore.Update(ctx, sess)
 
-	// For now, use the main agent for chat
-	// In a full implementation, this would route to the appropriate agent based on session type
-	response, err := s.mainAgent.Chat(ctx, req.Message)
+	// Get destination from session's associated agent
+	var destination string
+	if agentID, ok := sess.GetMetadata("agent_id"); ok {
+		if agentIDStr, ok := agentID.(string); ok && agentIDStr != "" && s.agentRepo != nil {
+			ag, err := s.agentRepo.GetAgent(ctx, agentIDStr)
+			if err == nil && ag != nil {
+				destination = ag.Destination
+			}
+		}
+	}
+
+	// Get user-scoped memory for cross-session preferences
+	var userMem *memory.PersistentMemory
+	userID := ""
+	if uid, ok := sess.GetMetadata("user_id"); ok {
+		if userIDStr, ok := uid.(string); ok && userIDStr != "" {
+			userID = userIDStr
+		}
+	}
+	// If no user_id, use default user for preferences
+	if userID == "" {
+		userID = "demo-user-001"
+	}
+	userMem = s.getUserMemory(userID)
+	log.Printf("[ChatSession] Non-streaming chat using user memory for user %s", userID)
+
+	// Load conversation history from session's memory storage
+	var conversationHistory []llm.Message
+	if s.memoryStorage != nil {
+		snapshot, err := s.memoryStorage.Load(ctx, sessionID)
+		if err == nil && snapshot != nil {
+			for _, item := range snapshot.ShortTerm {
+				if item.Type == "message" {
+					role := "user"
+					if r, ok := item.Metadata["role"].(string); ok {
+						role = r
+					}
+					conversationHistory = append(conversationHistory, llm.Message{
+						Role:    role,
+						Content: item.Content,
+					})
+				}
+			}
+		}
+	}
+
+	// Use ChatWithDestinationAndHistory for proper memory handling
+	var response string
+	if userMem != nil {
+		// Always use ChatWithDestinationAndHistory when user memory is available
+		// to ensure preferences are loaded
+		response, err = s.mainAgent.ChatWithDestinationAndHistory(ctx, req.Message, destination, conversationHistory, userMem)
+	} else {
+		// Fallback to basic chat when no user memory
+		response, err = s.mainAgent.Chat(ctx, req.Message)
+	}
+
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Chat failed: %v", err), http.StatusInternalServerError)
 		return
+	}
+
+	// Save messages to memory storage
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer saveCancel()
+
+	if s.memoryStorage != nil {
+		snapshot, err := s.memoryStorage.Load(saveCtx, sessionID)
+		if err != nil {
+			snapshot = &memory.Snapshot{
+				SessionID: sessionID,
+				ShortTerm: []memory.Item{},
+				LongTerm:  []memory.Item{},
+				CreatedAt: time.Now(),
+			}
+		}
+		now := time.Now()
+		snapshot.ShortTerm = append(snapshot.ShortTerm, memory.Item{
+			ID:        generateID(),
+			Type:      "message",
+			Content:   req.Message,
+			Metadata:  map[string]any{"role": "user"},
+			Timestamp: now,
+		})
+		snapshot.ShortTerm = append(snapshot.ShortTerm, memory.Item{
+			ID:        generateID(),
+			Type:      "message",
+			Content:   response,
+			Metadata:  map[string]any{"role": "assistant"},
+			Timestamp: now,
+		})
+		snapshot.UpdatedAt = now
+		s.memoryStorage.Save(saveCtx, sessionID, snapshot)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -2388,6 +2683,23 @@ func (s *Server) chatSessionStream(ctx context.Context, w http.ResponseWriter, r
 		}
 	}
 
+	// Get user-scoped memory for cross-session preferences
+	// Use default user if no user_id is set in session
+	var userMem *memory.PersistentMemory
+	userID := ""
+	if uid, ok := sess.GetMetadata("user_id"); ok {
+		if userIDStr, ok := uid.(string); ok && userIDStr != "" {
+			userID = userIDStr
+		}
+	}
+	// If no user_id, use default user for preferences
+	if userID == "" {
+		userID = "default"
+		log.Printf("[ChatSession] No user_id in session, using default user: %s", userID)
+	}
+	userMem = s.getUserMemory(userID)
+	log.Printf("[ChatSession] Loaded user memory for user %s", userID)
+
 	// Load conversation history from session's memory storage
 	var conversationHistory []llm.Message
 	if s.memoryStorage != nil {
@@ -2423,12 +2735,14 @@ func (s *Server) chatSessionStream(ctx context.Context, w http.ResponseWriter, r
 	}
 
 	// Get stream from main agent with destination context and session history
+	// Pass user memory for preferences loading/saving
 	var outputCh <-chan string
 	var errCh <-chan error
-	if destination != "" {
-		outputCh, errCh, _ = s.mainAgent.ChatStreamWithDestinationAndHistory(ctx, req.Message, destination, conversationHistory)
+	if userMem != nil {
+		// Always use ChatStreamWithDestinationAndHistory when user memory is available
+		outputCh, errCh, _ = s.mainAgent.ChatStreamWithDestinationAndHistory(ctx, req.Message, destination, conversationHistory, userMem)
 	} else {
-		// For sessions without destination, use regular chat with history
+		// Fallback to basic chat stream when no user memory
 		outputCh, errCh = s.mainAgent.ChatStream(ctx, req.Message)
 	}
 
@@ -2462,9 +2776,13 @@ func (s *Server) chatSessionStream(ctx context.Context, w http.ResponseWriter, r
 	}
 
 	// Save messages to memory storage
+	// Use a new context with timeout to avoid context canceled issues
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer saveCancel()
+
 	if s.memoryStorage != nil && fullResponse.Len() > 0 {
 		// Load existing snapshot or create new one
-		snapshot, err := s.memoryStorage.Load(ctx, sessionID)
+		snapshot, err := s.memoryStorage.Load(saveCtx, sessionID)
 		if err != nil {
 			snapshot = &memory.Snapshot{
 				SessionID: sessionID,
@@ -2495,13 +2813,29 @@ func (s *Server) chatSessionStream(ctx context.Context, w http.ResponseWriter, r
 		snapshot.ShortTerm = append(snapshot.ShortTerm, assistantItem)
 
 		// Save snapshot
-		if err := s.memoryStorage.Save(ctx, sessionID, snapshot); err != nil {
+		if err := s.memoryStorage.Save(saveCtx, sessionID, snapshot); err != nil {
 			log.Printf("[Chat] Failed to save messages: %v", err)
+		} else {
+			log.Printf("[Chat] Saved %d messages to session %s memory", len(snapshot.ShortTerm), sessionID)
 		}
 
 		// Update session message count
 		sess.IncrementMessageCount()
-		s.sessionStore.Update(ctx, sess)
+		s.sessionStore.Update(saveCtx, sess)
+	}
+
+	// Save user-scoped memory (preferences) after chat completes
+	// Wait briefly for async preference extraction to complete
+	if userMem != nil {
+		if userID, ok := sess.GetMetadata("user_id"); ok {
+			if userIDStr, ok := userID.(string); ok && userIDStr != "" {
+				// Wait for async preference extraction (runs in MainAgent goroutine)
+				// This is a temporary solution - ideally we'd use a channel or callback
+				time.Sleep(3 * time.Second)
+				s.saveUserMemory(userIDStr, userMem)
+				log.Printf("[ChatSession] Saved user memory for user %s", userIDStr)
+			}
+		}
 	}
 
 	fmt.Fprintf(w, "data: [DONE]\n\n")
@@ -2535,6 +2869,8 @@ func main() {
 		PostgresPassword: getEnv("POSTGRES_PASSWORD", "postgres"),
 		PostgresDatabase: getEnv("POSTGRES_DB", "uta_travel"),
 		PostgresSSLMode:  getEnv("POSTGRES_SSLMODE", "disable"),
+		// Feature flags - RAG disabled by default
+		EnableRAG: getEnvBool("ENABLE_RAG", false),
 	}
 
 	server := NewServer(config)
